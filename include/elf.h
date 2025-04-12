@@ -65,6 +65,8 @@
 #define EM_MIPS 8
 /* MIPS RS4000 Big-Endian */
 #define EM_MIPS_RS4_BE 10
+/* PowerPC */
+#define EM_PPC 20
 
 /*=== Values for e_version ===*/
 /* Invalid version */
@@ -223,7 +225,7 @@ typedef struct
 	Elf32_Half e_shentsize;
 	/* Section header table entry count */
 	Elf32_Half e_shnum;
-	/* Index of section name string table insidesection header table */
+	/* Index of section name string table inside section header table */
 	Elf32_Half e_shstrndx;
 } Elf32_Ehdr;
 
