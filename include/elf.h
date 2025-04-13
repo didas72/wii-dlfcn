@@ -135,8 +135,11 @@
 #define SHF_MASKPROC 0xf0000000
 
 /*=== Symbol info bit manipulations ===*/
+/* Symbol binding */
 #define ELF32_ST_BIND(i) ((i)>>4)
+/* Symbol type */
 #define ELF32_ST_TYPE(i) ((i)&0xf)
+/* Pack symbol and type */
 #define ELF32_ST_INFO(b,t) (((b)<<4)+((t)&0xf))
 
 /*=== Symbol bindings ===*/
@@ -168,8 +171,11 @@
 #define STT_HIPROC 4
 
 /*=== Relocation info bit manipulations ===*/
+/* Symbol table index */
 #define ELF32_R_SYM(i) ((i)>>8)
+/* Relocation type */
 #define ELF32_R_TYPE(i) ((unsigned char)(i))
+/* Pack symbol and type */
 #define ELF32_R_INFO(s,t) (((s)<<8)+(unsigned char)(t))
 
 /*=== Segment types ===*/
