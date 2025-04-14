@@ -8,8 +8,6 @@
 #include <wiiuse/wpad.h>
 #include <fat.h>
 
-#define TPS 60749650
-
 int main()
 {
 	int frames = 0;
@@ -35,11 +33,14 @@ int main()
 		return 1;
 	}
 
-	if (!dlopen("/wii-dlfcn/main.o", 0))
+	void *handle = dlopen("/wii-dlfcn/main.o", 0);
+	if (!handle)
 		printf("%s\n", dlerror());
 	else
+	{
 		printf("Success\n");
-
+		dlclose(handle);
+	}
 
 	while(++frames < 300)
 	{
