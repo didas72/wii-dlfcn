@@ -9,18 +9,22 @@
 #include "elf.h"
 
 typedef struct {
+	char *name;
+	Elf32_Off offset;
+	Elf32_Sword addend;
+	Elf32_Half section;
+	unsigned char rel_type;
+} rel_symbol_t;
+
+typedef struct {
 	FILE *file;
 	size_t len;
 	Elf32_Ehdr elf;
 	Elf32_Shdr *sects;
 	char *sh_strings;
+	rel_symbol_t *relocations;
+	int rel_count;
 } elf_obj_t;
-
-typedef struct {
-	char **names;
-	void **ptrs;
-	size_t length;
-} symbol_table_t;
 
 static char *error = NULL;
 
@@ -62,6 +66,7 @@ static void elf_obj_destroy(elf_obj_t *obj)
 	if (obj->file) fclose(obj->file);
 	if (obj->sects) free(obj->sects);
 	if (obj->sh_strings) free(obj->sh_strings);
+	if (obj->relocations) free(obj->relocations);
 	free(obj);
 }
 
@@ -192,120 +197,126 @@ static char elf_load_shstrings(elf_obj_t *obj)
 	return 1;
 }
 
-static char elf_show_symtab(elf_obj_t *obj, int idx)
+static char save_relocations(int target_sect_idx, Elf32_Rela *relocations, int rela_count, Elf32_Sym *symbols, char *sym_strs, rel_symbol_t *finals)
 {
-	Elf32_Shdr *sect = &obj->sects[idx];
-	int ent_count = sect->sh_size / sect->sh_entsize;
-
-	printf("Sect%02d: SYMTAB sym_count=%d STRTAB=%d last_local+1=%d name=%s\n", idx, ent_count, sect->sh_link, sect->sh_info, &obj->sh_strings[sect->sh_name]);
-
-	//Load symbol strings
-	Elf32_Shdr *str_sect = &obj->sects[sect->sh_link];
-	char *sym_strs = malloc(str_sect->sh_size);
-	if (!sym_strs)
+	for (int i = 0; i < rela_count; ++i)
 	{
-		error = "Failed alloc space for SYMTAB symbol strings";
-		return 0;
-	}
-	
-	fseek(obj->file, str_sect->sh_offset, SEEK_SET);
-	if (str_sect->sh_size != fread(sym_strs, 1, str_sect->sh_size, obj->file))
-	{
-		error = "Failed to read SYMTAB symbol strings";
-		free(sym_strs);
-		return 0;
+		Elf32_Rela *rela = &relocations[i];
+		rel_symbol_t *final = &finals[i];
+		
+		//Find symbol name
+		int sym_idx = ELF32_R_SYM(rela->r_info);
+		Elf32_Sym *symbol = &symbols[sym_idx];
+		char *name = &sym_strs[symbol->st_name];
+
+		//Copy data
+		final->name = strdup(name);
+		final->section = target_sect_idx;
+		final->offset = rela->r_offset;
+		final->rel_type = ELF32_R_TYPE(rela->r_info);
+		final->addend = rela->r_addend;
 	}
 
-	//Load symbols
-	Elf32_Sym *syms = malloc(sect->sh_size);
-	if (!syms)
-	{
-		error = "Failed alloc space for SYMTAB symbols";
-		free(sym_strs);
-		return 0;
-	}
-
-	fseek(obj->file, sect->sh_offset, SEEK_SET);
-	if (sect->sh_size != fread(syms, 1, sect->sh_size, obj->file))
-	{
-		error = "Failed to read SYMTAB symbols";
-		free(sym_strs);
-		free(syms);
-		return 0;
-	}
-
-	//Show symbols
-	for (int s = 0; s < ent_count; ++s)
-	{
-		Elf32_Sym *sym = &syms[s];
-		printf("Sym%02d: name=%s value=0x%x size=0x%x bind=0x%x type=0x%x\n", s, &sym_strs[sym->st_name], sym->st_value, sym->st_size, ELF32_ST_BIND(sym->st_info), ELF32_ST_TYPE(sym->st_info));
-	}
-
-	//Cleanup
-	free(syms);
-	free(sym_strs);
-	return 1;
-}
-
-static char elf_show_rela(elf_obj_t *obj, int idx)
-{
-	Elf32_Shdr *sect = &obj->sects[idx];
-	int ent_count = sect->sh_size / sect->sh_entsize;
-
-	printf("Sect%02d: RELA sym_count=%d sym_tab=%d target_sect=%d name=%s\n", idx, ent_count, sect->sh_link, sect->sh_info, &obj->sh_strings[sect->sh_name]);
-
-	Elf32_Rela *syms_rela = malloc(sect->sh_size);
-	if (!syms_rela)
-	{
-		error = "Failed alloc space for RELA symbols";
-		return 0;
-	}
-
-	fseek(obj->file, sect->sh_offset, SEEK_SET);
-	if (sect->sh_size != fread(syms_rela, 1, sect->sh_size, obj->file))
-	{
-		error = "Failed to read RELA symbols";
-		free(syms_rela);
-		return 0;
-	}
-
-	for (int s = 0; s < ent_count; ++s)
-	{
-		Elf32_Rela *sym = &syms_rela[s];
-		printf("Sym%02d: off=0x%x symbol=%d type=%d addend=0x%x\n", s, sym->r_offset, ELF32_R_SYM(sym->r_info), ELF32_R_TYPE(sym->r_info), sym->r_offset);
-	}
-
-	free(syms_rela);
 	return 1;
 }
 
 static char elf_find_undefined_symbols(elf_obj_t *obj)
 {
-	int count = obj->elf.e_shnum;
-	printf("RELA and SYMTAB sections (out of %d):\n", obj->elf.e_shnum);
-
-	for (int i = 1; i < count; ++i)
+	for (int i = 0; i < obj->elf.e_shnum; ++i)
 	{
-		Elf32_Shdr *sect = &obj->sects[i];
+		Elf32_Shdr *rela_sect = &obj->sects[i];
+		char *sect_name = &obj->sh_strings[rela_sect->sh_name];
 
-		printf("S%02d: type=%d\n", i, sect->sh_type);
+		//Skip non relocation sections
+		//TODO: Handle SHT_REL
+		if (rela_sect->sh_type != SHT_RELA) continue;
 
-		if (sect->sh_type == SHT_SYMTAB)
+		//Skip debug related relocations
+		//REVIEW: For now, also skip .eh_frame related relocations
+		if (strstr(sect_name, "debug")) continue;
+		if (strstr(sect_name, "eh_frame")) continue;
+
+		int rela_count = rela_sect->sh_size / sizeof(Elf32_Rela);
+		Elf32_Shdr *sym_sect = &obj->sects[rela_sect->sh_link];
+		Elf32_Shdr *symstr_sect = &obj->sects[sym_sect->sh_link];
+
+		//Sanity check entsize
+		if (rela_sect->sh_entsize != sizeof(Elf32_Rela) || sym_sect->sh_entsize != sizeof(Elf32_Sym))
 		{
-			if (!elf_show_symtab(obj, i))
-				return 0;
-			continue;
+			error = "Invalid entsize for rela or symtab";
+			return 0;
 		}
 
-		if (sect->sh_type != SHT_RELA || !strstr(&obj->sh_strings[sect->sh_name], ".rela.text"))
-			continue;
+		
+		//Allocate buffers
+		Elf32_Rela *relocations = malloc(rela_sect->sh_size);
+		Elf32_Sym *symbols = malloc(sym_sect->sh_size);
+		char *sym_strs = malloc(symstr_sect->sh_size);
 
-		continue; //TODO: Remove
-		if (!elf_show_rela(obj, i))
+		if (!relocations || !symbols || !sym_strs)
+		{
+			error = "Failed to alloc space for relocations or symbol strings";
+			free(relocations);
+			free(symbols);
+			free(sym_strs);
 			return 0;
+		}
+
+		//Read data
+		fseek(obj->file, rela_sect->sh_offset, SEEK_SET);
+		if (rela_sect->sh_size != fread(relocations, 1, rela_sect->sh_size, obj->file))
+		{
+			error = "Failed to read relocations";
+			free(relocations);
+			free(symbols);
+			free(sym_strs);
+			return 0;
+		}
+		fseek(obj->file, sym_sect->sh_offset, SEEK_SET);
+		if (sym_sect->sh_size != fread(symbols, 1, sym_sect->sh_size, obj->file))
+		{
+			error = "Failed to read symbols";
+			free(relocations);
+			free(symbols);
+			free(sym_strs);
+			return 0;
+		}
+		fseek(obj->file, symstr_sect->sh_offset, SEEK_SET);
+		if (symstr_sect->sh_size != fread(sym_strs, 1, symstr_sect->sh_size, obj->file))
+		{
+			error = "Failed to read symbol strings";
+			free(relocations);
+			free(symbols);
+			free(sym_strs);
+			return 0;
+		}
+
+		//Grow (or alloc) relocations vector
+		int old_size = obj->rel_count;
+		int new_size = old_size + rela_count;
+		rel_symbol_t *tmp = realloc(obj->relocations, new_size * sizeof(rel_symbol_t));
+		if (!tmp)
+		{
+			error = "Failed to grow relocations list";
+			free(relocations);
+			free(symbols);
+			free(sym_strs);
+			return 0;
+		}
+		obj->relocations = tmp;
+		obj->rel_count = new_size;
+
+		//Interpret data
+		char success = save_relocations(i, relocations, rela_count, symbols, sym_strs, &obj->relocations[old_size]);
+
+		//Cleanup
+		free(relocations);
+		free(symbols);
+		free(sym_strs);
+
+		if (!success) return 0;
 	}
 
-	//TODO: Finish
 	return 1;
 }
 
@@ -338,6 +349,14 @@ void *dlopen(const char *path, int mode)
 	{
 		elf_obj_destroy(obj);
 		return NULL;
+	}
+
+	printf("Selected %d relocations:\n", obj->rel_count);
+	for (int i = 0; i < obj->rel_count; ++i)
+	{
+		rel_symbol_t *sym = &obj->relocations[i];
+		printf("R%02d: name=%s rel_type=%d sect=%d off=0x%x addend=0x%x\n",
+			i, sym->name, sym->rel_type, sym->section, sym->offset, sym->addend);
 	}
 
 	//TODO: Finish
