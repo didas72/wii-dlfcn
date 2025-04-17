@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "elf.h"
+#include "mmu_dump.h"
 
 typedef struct {
 	char *name;
@@ -26,7 +27,18 @@ typedef struct {
 	int rel_count;
 } elf_obj_t;
 
+typedef struct {
+	char *name;
+	Elf32_Addr addr;
+} def_symbol_t;
+
+typedef struct {
+	def_symbol_t *symbols;
+	int sym_count;
+} elf_exec_t;
+
 static char *error = NULL;
+static elf_exec_t *self = NULL;
 
 static elf_obj_t *elf_obj_create(const char *path)
 {
@@ -68,6 +80,21 @@ static void elf_obj_destroy(elf_obj_t *obj)
 	if (obj->sh_strings) free(obj->sh_strings);
 	if (obj->relocations) free(obj->relocations);
 	free(obj);
+}
+
+static elf_exec_t *elf_exec_create()
+{
+	elf_exec_t *exec = malloc(sizeof(elf_exec_t));
+
+	exec->symbols = NULL;
+	exec->sym_count = 0;
+
+	return exec;
+}
+static void elf_exec_destroy(elf_exec_t *exec)
+{
+	if (exec->symbols) free(exec->symbols);
+	free(exec);
 }
 
 static char elf_header_valid(elf_obj_t *obj)
@@ -324,6 +351,16 @@ void *dlopen(const char *path, int mode)
 {
 	(void)mode; //TODO: Not
 
+	printf("Checking MSR: %08x\n", msr_dump());
+
+	printf("Checking BATs:\n");
+	uint32_t regs[16];
+	bat_dump(regs);
+	for (int i = 0; i < 16; ++i)
+		printf("%02d: %08x\n", i, regs[i]);
+
+	return (void*)1;
+
 	elf_obj_t *obj = elf_obj_create(path);
 	if (!obj) return NULL;
 	
@@ -351,6 +388,7 @@ void *dlopen(const char *path, int mode)
 		return NULL;
 	}
 
+	//TODO: Remove
 	printf("Selected %d relocations:\n", obj->rel_count);
 	for (int i = 0; i < obj->rel_count; ++i)
 	{
