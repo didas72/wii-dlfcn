@@ -8,6 +8,44 @@
 #include <wiiuse/wpad.h>
 #include <fat.h>
 
+static void dbg_wait(int frames)
+{
+	while (frames--) VIDEO_WaitVSync();
+}
+
+void test()
+{
+	int result;
+
+	result = dlinit("/apps/wii-dlfcn-test/boot.elf");
+	if (result)
+	{
+		printf("dlinit failed: %s\n", dlerror());
+		return;
+	}
+	printf("dlinit success\n");
+
+	dbg_wait(30);
+
+	void *handle = dlopen("/wii-dlfcn/main.o", 0);
+	if (!handle)
+	{
+		printf("dlopen failed: %s\n", dlerror());
+		return;
+	}
+	printf("dlopen success\n");
+
+	dbg_wait(30);
+
+	result = dlclose(handle);
+	if (result)
+	{
+		printf("dlclose failed: %s\n", dlerror());
+		return;
+	}
+	printf("dlclose success\n");
+}
+
 int main()
 {
 	int frames = 0;
@@ -33,14 +71,7 @@ int main()
 		return 1;
 	}
 
-	void *handle = dlopen("/wii-dlfcn/main.o", 0);
-	if (!handle)
-		printf("%s\n", dlerror());
-	else
-	{
-		printf("Success\n");
-		dlclose(handle);
-	}
+	test();
 
 	while(++frames < 300)
 	{

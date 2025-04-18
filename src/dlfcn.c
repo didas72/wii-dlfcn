@@ -13,7 +13,7 @@
 static char *error = NULL;
 static elf_exec_t *self = NULL;
 
-static char elf_valid_compat(Elf32_Ehdr *elf)
+static int elf_valid_compat(Elf32_Ehdr *elf)
 {
 	//Check ELF magic
 	if (elf->e_ident[EI_MAG0] != ELFMAG0 ||
@@ -51,13 +51,13 @@ static char elf_valid_compat(Elf32_Ehdr *elf)
 	return 1;
 }
 
-static char elf_rel_valid(elf_rel_t *obj)
+static int elf_rel_valid(elf_rel_t *obj)
 {
-	if (!elf_valid_compat(&obj->elf))
+	if (!elf_valid_compat(&obj->elf.header))
 		return 0;
 	
 	//Require object file
-	if (obj->elf.e_type != ET_REL)
+	if (obj->elf.header.e_type != ET_REL)
 	{
 		error = "Unsupported ELF type, must be ET_REL (object file)";
 		return 0;
@@ -66,13 +66,13 @@ static char elf_rel_valid(elf_rel_t *obj)
 	return 1;
 }
 
-static char elf_exec_valid(elf_exec_t *exec)
+static int elf_exec_valid(elf_exec_t *exec)
 {
-	if (!elf_valid_compat(&exec->elf))
+	if (!elf_valid_compat(&exec->elf.header))
 		return 0;
 	
 	//Require object file
-	if (exec->elf.e_type != ET_EXEC)
+	if (exec->elf.header.e_type != ET_EXEC)
 	{
 		error = "Unsupported ELF type, must be ET_EXEC (executable file)";
 		return 0;
@@ -81,20 +81,20 @@ static char elf_exec_valid(elf_exec_t *exec)
 	return 1;
 }
 
-static char elf_load_sects(elf_rel_t *obj)
+static int elf_load_sects(elf_file_t *elf)
 {
-	int count = obj->elf.e_shnum;
+	int count = elf->header.e_shnum;
 	size_t len = sizeof(Elf32_Shdr) * count;
 
-	obj->sects = malloc(len);
-	if (!obj->sects)
+	elf->sects = malloc(len);
+	if (!elf->sects)
 	{
 		error = "Failed to alloc space for sections";
 		return 0;
 	}
 
-	fseek(obj->file, obj->elf.e_shoff, SEEK_SET);
-	if (count != (int)fread(obj->sects, sizeof(Elf32_Shdr), count, obj->file))
+	fseek(elf->file, elf->header.e_shoff, SEEK_SET);
+	if (count != (int)fread(elf->sects, sizeof(Elf32_Shdr), count, elf->file))
 	{
 		error = "Failed to load sections";
 		return 0;
@@ -103,24 +103,24 @@ static char elf_load_sects(elf_rel_t *obj)
 	return 1;
 }
 
-static char elf_load_shstrings(elf_rel_t *obj)
+static int elf_load_shstrings(elf_file_t *elf)
 {
-	if (obj->elf.e_shstrndx == SHN_UNDEF)
+	if (elf->header.e_shstrndx == SHN_UNDEF)
 		return 1;
 
 	//section header strings section
-	Elf32_Shdr *sect = &obj->sects[obj->elf.e_shstrndx];
+	Elf32_Shdr *sect = &elf->sects[elf->header.e_shstrndx];
 	Elf32_Off location = sect->sh_offset;
 
-	obj->sh_strings = malloc(sect->sh_size);
-	if (!obj->sh_strings)
+	elf->sh_strings = malloc(sect->sh_size);
+	if (!elf->sh_strings)
 	{
 		error = "Failed to alloc space for sh_strings";
 		return 0;
 	}
 
-	fseek(obj->file, location, SEEK_SET);
-	if (sect->sh_size != fread(obj->sh_strings, 1, sect->sh_size, obj->file))
+	fseek(elf->file, location, SEEK_SET);
+	if (sect->sh_size != fread(elf->sh_strings, 1, sect->sh_size, elf->file))
 	{
 		error = "Failed to load sh_strings";
 		return 0;
@@ -129,7 +129,7 @@ static char elf_load_shstrings(elf_rel_t *obj)
 	return 1;
 }
 
-static char save_relocations(int target_sect_idx, Elf32_Rela *relocations, int rela_count, Elf32_Sym *symbols, char *sym_strs, rel_symbol_t *finals)
+static int save_relocations(int target_sect_idx, Elf32_Rela *relocations, int rela_count, Elf32_Sym *symbols, char *sym_strs, rel_symbol_t *finals)
 {
 	for (int i = 0; i < rela_count; ++i)
 	{
@@ -152,15 +152,14 @@ static char save_relocations(int target_sect_idx, Elf32_Rela *relocations, int r
 	return 1;
 }
 
-static char elf_find_undefined_symbols(elf_rel_t *obj)
+static int elf_find_undefined_symbols(elf_rel_t *obj)
 {
-	for (int i = 0; i < obj->elf.e_shnum; ++i)
+	for (int i = 0; i < obj->elf.header.e_shnum; ++i)
 	{
-		Elf32_Shdr *rela_sect = &obj->sects[i];
-		char *sect_name = &obj->sh_strings[rela_sect->sh_name];
+		Elf32_Shdr *rela_sect = &obj->elf.sects[i];
+		char *sect_name = &obj->elf.sh_strings[rela_sect->sh_name];
 
-		//Skip non relocation sections
-		//TODO: Handle SHT_REL
+		//Skip non relocation sections (SHT_REL not used in powerpc-eabi-none)
 		if (rela_sect->sh_type != SHT_RELA) continue;
 
 		//Skip debug related relocations
@@ -169,8 +168,8 @@ static char elf_find_undefined_symbols(elf_rel_t *obj)
 		if (strstr(sect_name, "eh_frame")) continue;
 
 		int rela_count = rela_sect->sh_size / sizeof(Elf32_Rela);
-		Elf32_Shdr *sym_sect = &obj->sects[rela_sect->sh_link];
-		Elf32_Shdr *symstr_sect = &obj->sects[sym_sect->sh_link];
+		Elf32_Shdr *sym_sect = &obj->elf.sects[rela_sect->sh_link];
+		Elf32_Shdr *symstr_sect = &obj->elf.sects[sym_sect->sh_link];
 
 		//Sanity check entsize
 		if (rela_sect->sh_entsize != sizeof(Elf32_Rela) || sym_sect->sh_entsize != sizeof(Elf32_Sym))
@@ -179,7 +178,6 @@ static char elf_find_undefined_symbols(elf_rel_t *obj)
 			return 0;
 		}
 
-		
 		//Allocate buffers
 		Elf32_Rela *relocations = malloc(rela_sect->sh_size);
 		Elf32_Sym *symbols = malloc(sym_sect->sh_size);
@@ -195,8 +193,8 @@ static char elf_find_undefined_symbols(elf_rel_t *obj)
 		}
 
 		//Read data
-		fseek(obj->file, rela_sect->sh_offset, SEEK_SET);
-		if (rela_sect->sh_size != fread(relocations, 1, rela_sect->sh_size, obj->file))
+		fseek(obj->elf.file, rela_sect->sh_offset, SEEK_SET);
+		if (rela_sect->sh_size != fread(relocations, 1, rela_sect->sh_size, obj->elf.file))
 		{
 			error = "Failed to read relocations";
 			free(relocations);
@@ -204,8 +202,8 @@ static char elf_find_undefined_symbols(elf_rel_t *obj)
 			free(sym_strs);
 			return 0;
 		}
-		fseek(obj->file, sym_sect->sh_offset, SEEK_SET);
-		if (sym_sect->sh_size != fread(symbols, 1, sym_sect->sh_size, obj->file))
+		fseek(obj->elf.file, sym_sect->sh_offset, SEEK_SET);
+		if (sym_sect->sh_size != fread(symbols, 1, sym_sect->sh_size, obj->elf.file))
 		{
 			error = "Failed to read symbols";
 			free(relocations);
@@ -213,8 +211,8 @@ static char elf_find_undefined_symbols(elf_rel_t *obj)
 			free(sym_strs);
 			return 0;
 		}
-		fseek(obj->file, symstr_sect->sh_offset, SEEK_SET);
-		if (symstr_sect->sh_size != fread(sym_strs, 1, symstr_sect->sh_size, obj->file))
+		fseek(obj->elf.file, symstr_sect->sh_offset, SEEK_SET);
+		if (symstr_sect->sh_size != fread(sym_strs, 1, symstr_sect->sh_size, obj->elf.file))
 		{
 			error = "Failed to read symbol strings";
 			free(relocations);
@@ -252,8 +250,158 @@ static char elf_find_undefined_symbols(elf_rel_t *obj)
 	return 1;
 }
 
+static int save_symbols(Elf32_Sym *symbols, int sym_count, char *sym_strs, def_symbol_t *finals)
+{
+	for (int i = 0; i < sym_count; ++i)
+	{
+		Elf32_Sym *symbol = &symbols[i];
+		def_symbol_t *final = &finals[i];
+
+		//Find symbol name
+		char *name = &sym_strs[symbol->st_name];
+
+		//Copy data
+		final->name = strdup(name);
+		final->value = symbol->st_value;
+		final->bind = ELF32_ST_BIND(symbol->st_info);
+		final->type = ELF32_ST_TYPE(symbol->st_info);
+		final->section = symbol->st_shndx;
+	}
+
+	return 1;
+}
+
+static int elf_find_defined_symbols(elf_exec_t *exec)
+{
+	for (int i = 0; i < exec->elf.header.e_shnum; ++i)
+	{
+		Elf32_Shdr *sym_sect = &exec->elf.sects[i];
+
+		//Skip non symbol sections
+		if (sym_sect->sh_type != SHT_SYMTAB) continue;
+
+		int sym_count = sym_sect->sh_size / sizeof(Elf32_Sym);
+		Elf32_Shdr *symstr_sect = &exec->elf.sects[sym_sect->sh_link];
+
+		//Sanity check entsize
+		if (sym_sect->sh_entsize != sizeof(Elf32_Sym))
+		{
+			error = "Invalid entsize for symtab";
+			return 0;
+		}
+
+		//Allocate buffers
+		Elf32_Sym *symbols = malloc(sym_sect->sh_size);
+		char *sym_strs = malloc(symstr_sect->sh_size);
+
+		if (!symbols || !sym_strs)
+		{
+			error = "Failed to alloc space for symbols or symbol strings";
+			free(symbols);
+			free(sym_strs);
+			return 0;
+		}
+
+		//Read data
+		fseek(exec->elf.file, sym_sect->sh_offset, SEEK_SET);
+		if (sym_sect->sh_size != fread(symbols, 1, sym_sect->sh_size, exec->elf.file))
+		{
+			error = "Failed to read symbols";
+			free(symbols);
+			free(sym_strs);
+			return 0;
+		}
+		fseek(exec->elf.file, symstr_sect->sh_offset, SEEK_SET);
+		if (symstr_sect->sh_size != fread(sym_strs, 1, symstr_sect->sh_size, exec->elf.file))
+		{
+			error = "Failed to read symbol strings";
+			free(symbols);
+			free(sym_strs);
+			return 0;
+		}
+
+		//Grow (or alloc) symbols vector
+		int old_size = exec->sym_count;
+		int new_size = old_size + sym_count;
+		def_symbol_t *tmp = realloc(exec->symbols, new_size * sizeof(def_symbol_t));
+		if (!tmp)
+		{
+			error = "Failed to grow symbol list";
+			free(symbols);
+			free(sym_strs);
+			return 0;
+		}
+		exec->symbols = tmp;
+		exec->sym_count = new_size;
+
+		//Interpret data
+		char success = save_symbols(symbols, sym_count, sym_strs, &exec->symbols[old_size]);
+
+		//Cleanup
+		free(symbols);
+		free(sym_strs);
+
+		if (!success) return 0;
+	}
+
+	return 1;
+}
+
+int dlinit(char *own_path)
+{
+	error = NULL;
+
+	if (self)
+	{
+		error = "Already initialized wii-dlfcn";
+		return 1;
+	}
+
+	elf_exec_t *exec = elf_exec_create(own_path, &error);
+	if (!exec) return 1;
+
+	if (!elf_exec_valid(exec))
+	{
+		elf_exec_destroy(exec);
+		return 1;
+	}
+
+	if (!elf_load_sects(&exec->elf))
+	{
+		elf_exec_destroy(exec);
+		return 1;
+	}
+	
+	if (!elf_load_shstrings(&exec->elf))
+	{
+		elf_exec_destroy(exec);
+		return 1;
+	}
+
+	if (!elf_find_defined_symbols(exec))
+	{
+		elf_exec_destroy(exec);
+		return 1;
+	}
+
+	//TODO: Remove
+	printf("Found %d symbols:\n", exec->sym_count);
+	for (int i = 0; i < exec->sym_count && i < 16; ++i)
+	{
+		def_symbol_t *sym = &exec->symbols[i];
+		printf("S%02d: name=%s value=0x%x bind=%d type=%d section=%d\n",
+			i, sym->name, sym->value, sym->bind, sym->type, sym->section);
+		//REVIEW: Section might not actually be section
+		//FIXME: Names not showing
+	}
+
+	self = exec;
+	return 0;
+}
+
 void *dlopen(const char *path, int mode)
 {
+	error = NULL;
 	(void)mode; //TODO: Not
 
 	elf_rel_t *obj = elf_rel_create(path, &error);
@@ -265,13 +413,13 @@ void *dlopen(const char *path, int mode)
 		return NULL;
 	}
 
-	if (!elf_load_sects(obj))
+	if (!elf_load_sects(&obj->elf))
 	{
 		elf_rel_destroy(obj);
 		return NULL;
 	}
 
-	if (!elf_load_shstrings(obj))
+	if (!elf_load_shstrings(&obj->elf))
 	{
 		elf_rel_destroy(obj);
 		return NULL;
@@ -292,12 +440,18 @@ void *dlopen(const char *path, int mode)
 			i, sym->name, sym->rel_type, sym->section, sym->offset, sym->addend);
 	}
 
-	//TODO: Finish
+	//TODO: Finish implementing. Must:
+	//Load .text* [aligned]
+	//Load .data* and .rodata* [aligned]
+	//Reserve .bss* [aligned]
+	//Match symbols on loaded executable
+	//Apply relocations
 	return obj;
 }
 
 int dlclose(void *handle)
 {
+	error = NULL;
 	elf_rel_destroy((elf_rel_t*)handle);
 	return 0;
 }
