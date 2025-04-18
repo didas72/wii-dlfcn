@@ -13,9 +13,7 @@
 /// @param own_path The path to the running executable
 /// @return 0 on error, 1 on success
 char dlinit(char *own_path);
-//TODO: Implement
 void *dlopen(const char *file, int mode);
-//TODO: Implement
 int dlclose(void *handle);
 char *dlerror(void);
 //TODO: Implement

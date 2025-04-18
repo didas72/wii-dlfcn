@@ -39,7 +39,7 @@ int main()
 	else
 	{
 		printf("Success\n");
-		//dlclose(handle);
+		dlclose(handle);
 	}
 
 	while(++frames < 300)

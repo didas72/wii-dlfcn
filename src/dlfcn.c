@@ -6,96 +6,12 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "data.h"
 #include "elf.h"
 #include "mmu_dump.h"
 
-typedef struct {
-	char *name;
-	Elf32_Off offset;
-	Elf32_Sword addend;
-	Elf32_Half section;
-	unsigned char rel_type;
-} rel_symbol_t;
-
-typedef struct {
-	FILE *file;
-	size_t len;
-	Elf32_Ehdr elf;
-	Elf32_Shdr *sects;
-	char *sh_strings;
-	rel_symbol_t *relocations;
-	int rel_count;
-} elf_obj_t;
-
-typedef struct {
-	char *name;
-	Elf32_Addr addr;
-} def_symbol_t;
-
-typedef struct {
-	def_symbol_t *symbols;
-	int sym_count;
-} elf_exec_t;
-
 static char *error = NULL;
 static elf_exec_t *self = NULL;
-
-static elf_obj_t *elf_obj_create(const char *path)
-{
-	elf_obj_t *obj = malloc(sizeof(elf_obj_t));
-	if (!obj)
-	{
-		error = "Failed to allocate space for elf object.";
-		return NULL;
-	}
-	memset(obj, 0, sizeof(elf_obj_t));
-
-	obj->file = fopen(path, "rb");
-	if (!obj->file)
-	{
-		error = "Could not open elf file.";
-		free(obj);
-		return NULL;
-	}
-
-	fseek(obj->file, 0, SEEK_END);
-	obj->len = ftell(obj->file);
-
-	if (obj->len < sizeof(Elf32_Ehdr))
-	{
-		error = "File too small to be an ELF.";
-		fclose(obj->file); free(obj);
-		return NULL;
-	}
-
-	fseek(obj->file, 0, SEEK_SET);
-	fread(&obj->elf, sizeof(Elf32_Ehdr), 1, obj->file); //TODO: Error check
-
-	return obj;
-}
-static void elf_obj_destroy(elf_obj_t *obj)
-{
-	if (obj->file) fclose(obj->file);
-	if (obj->sects) free(obj->sects);
-	if (obj->sh_strings) free(obj->sh_strings);
-	if (obj->relocations) free(obj->relocations);
-	free(obj);
-}
-
-static elf_exec_t *elf_exec_create()
-{
-	elf_exec_t *exec = malloc(sizeof(elf_exec_t));
-
-	exec->symbols = NULL;
-	exec->sym_count = 0;
-
-	return exec;
-}
-static void elf_exec_destroy(elf_exec_t *exec)
-{
-	if (exec->symbols) free(exec->symbols);
-	free(exec);
-}
 
 static char elf_header_valid(elf_obj_t *obj)
 {
@@ -187,8 +103,7 @@ static char elf_load_sects(elf_obj_t *obj)
 		return 0;
 	}
 
-	fseek(obj->file, obj->elf.e_shoff, SEEK_SET); //TODO: Error check
-	
+	fseek(obj->file, obj->elf.e_shoff, SEEK_SET);
 	if (count != (int)fread(obj->sects, sizeof(Elf32_Shdr), count, obj->file))
 	{
 		error = "Failed to load sections";
@@ -351,17 +266,7 @@ void *dlopen(const char *path, int mode)
 {
 	(void)mode; //TODO: Not
 
-	printf("Checking MSR: %08x\n", msr_dump());
-
-	printf("Checking BATs:\n");
-	uint32_t regs[16];
-	bat_dump(regs);
-	for (int i = 0; i < 16; ++i)
-		printf("%02d: %08x\n", i, regs[i]);
-
-	return (void*)1;
-
-	elf_obj_t *obj = elf_obj_create(path);
+	elf_obj_t *obj = elf_obj_create(path, &error);
 	if (!obj) return NULL;
 	
 	if (!elf_header_valid(obj) || !elf_header_compatible(obj))

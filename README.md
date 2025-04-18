@@ -14,3 +14,11 @@ Given the limitations of running 'bare metal' PowerPC code, certain features req
 - An initialization function call will be required
 
 These limitations are not fully figured out, as the project is still very early into development.
+
+## Unprepared notes for users
+
+This section is for notes that I need to leave to users but have not been properly written just yet. It serves mostly as a documentation TODO list.
+
+- `.o` files only (ELF relocatables)
+- Build with `-fPIC` (not tested if it's actually needed yet)
+- Partially link with `ld -r` to merge objects
