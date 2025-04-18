@@ -4,15 +4,15 @@
 
 #include "elf.h"
 
-elf_obj_t *elf_obj_create(const char *path, char **error)
+elf_rel_t *elf_rel_create(const char *path, char **error)
 {
-	elf_obj_t *obj = malloc(sizeof(elf_obj_t));
+	elf_rel_t *obj = malloc(sizeof(elf_rel_t));
 	if (!obj)
 	{
 		*error = "Failed to allocate space for elf object.";
 		return NULL;
 	}
-	memset(obj, 0, sizeof(elf_obj_t));
+	memset(obj, 0, sizeof(elf_rel_t));
 
 	obj->file = fopen(path, "rb");
 	if (!obj->file)
@@ -23,8 +23,8 @@ elf_obj_t *elf_obj_create(const char *path, char **error)
 	}
 
 	fseek(obj->file, 0, SEEK_END);
-	obj->len = ftell(obj->file);
-	if (obj->len < sizeof(Elf32_Ehdr))
+	long len = ftell(obj->file);
+	if (len < sizeof(Elf32_Ehdr))
 	{
 		*error = "File too small to be an ELF.";
 		fclose(obj->file); free(obj);
@@ -41,7 +41,7 @@ elf_obj_t *elf_obj_create(const char *path, char **error)
 
 	return obj;
 }
-void elf_obj_destroy(elf_obj_t *obj)
+void elf_rel_destroy(elf_rel_t *obj)
 {
 	if (obj->file) fclose(obj->file);
 	if (obj->sects) free(obj->sects);

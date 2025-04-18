@@ -13,30 +13,48 @@
 static char *error = NULL;
 static elf_exec_t *self = NULL;
 
-static char elf_header_valid(elf_obj_t *obj)
+static char elf_valid_compat(Elf32_Ehdr *elf)
 {
-	if (obj->elf.e_ident[EI_MAG0] != ELFMAG0 ||
-		obj->elf.e_ident[EI_MAG1] != ELFMAG1 ||
-		obj->elf.e_ident[EI_MAG2] != ELFMAG2 ||
-		obj->elf.e_ident[EI_MAG3] != ELFMAG3)
+	//Check ELF magic
+	if (elf->e_ident[EI_MAG0] != ELFMAG0 ||
+		elf->e_ident[EI_MAG1] != ELFMAG1 ||
+		elf->e_ident[EI_MAG2] != ELFMAG2 ||
+		elf->e_ident[EI_MAG3] != ELFMAG3)
 	{
 		error = "Invalid ELF magic";
+		return 0;
+	}
+
+	//Require 32-bit, Big Endian, ELF version values
+	if (elf->e_ident[EI_CLASS] != ELFCLASS32 ||
+		elf->e_ident[EI_DATA] != ELFDATA2MSB || 
+		elf->e_ident[EI_VERSION] != EV_CURRENT)
+	{
+		error = "Invalid IDENT values";
+		return 0;
+	}
+
+	//Require PPC
+	if (elf->e_machine != EM_PPC)
+	{
+		error = "Invalid target machine";
+		return 0;
+	}
+
+	//Require current ELF version
+	if (elf->e_version != EV_CURRENT)
+	{
+		error = "Invalid ELF version";
 		return 0;
 	}
 
 	return 1;
 }
 
-static char elf_header_compatible(elf_obj_t *obj)
+static char elf_rel_valid(elf_rel_t *obj)
 {
-	//Require 32-bit, Big Endian, ELF version values
-	if (obj->elf.e_ident[EI_CLASS] != ELFCLASS32 ||
-		obj->elf.e_ident[EI_DATA] != ELFDATA2MSB || 
-		obj->elf.e_ident[EI_VERSION] != EV_CURRENT)
-	{
-		error = "Invalid IDENT values";
+	if (!elf_valid_compat(&obj->elf))
 		return 0;
-	}
 	
 	//Require object file
 	if (obj->elf.e_type != ET_REL)
@@ -45,53 +63,25 @@ static char elf_header_compatible(elf_obj_t *obj)
 		return 0;
 	}
 
-	//Require PPC
-	if (obj->elf.e_machine != EM_PPC)
-	{
-		error = "Invalid target machine";
+	return 1;
+}
+
+static char elf_exec_valid(elf_exec_t *exec)
+{
+	if (!elf_valid_compat(&exec->elf))
 		return 0;
-	}
-
-	//Require current ELF version
-	if (obj->elf.e_version != EV_CURRENT)
+	
+	//Require object file
+	if (exec->elf.e_type != ET_EXEC)
 	{
-		error = "Invalid ELF version";
-		return 0;
-	}
-
-	//Ignore entry point and program header table offset
-
-	//Ensure section header table is within file bounds
-	if (obj->elf.e_shoff > obj->len)
-	{
-		error = "Section header out of bounds";
-		return 0;
-	}
-
-	//REVIEW: What to do with flags? Spec says should be zero, finding 0x8000??
-	//Ignore flags
-
-	//Sanity check header size
-	if (obj->elf.e_ehsize != sizeof(Elf32_Ehdr))
-	{
-		error = "Invalid header size";
-		return 0;
-	}
-
-	//Ignore program header table entry size and count
-	//Assume valid section header table entry size and count
-
-	//Ensure string table is within defined sections
-	if (obj->elf.e_shstrndx >= obj->elf.e_shnum)
-	{
-		error = "String table index out of bounds";
+		error = "Unsupported ELF type, must be ET_EXEC (executable file)";
 		return 0;
 	}
 
 	return 1;
 }
 
-static char elf_load_sects(elf_obj_t *obj)
+static char elf_load_sects(elf_rel_t *obj)
 {
 	int count = obj->elf.e_shnum;
 	size_t len = sizeof(Elf32_Shdr) * count;
@@ -113,7 +103,7 @@ static char elf_load_sects(elf_obj_t *obj)
 	return 1;
 }
 
-static char elf_load_shstrings(elf_obj_t *obj)
+static char elf_load_shstrings(elf_rel_t *obj)
 {
 	if (obj->elf.e_shstrndx == SHN_UNDEF)
 		return 1;
@@ -162,7 +152,7 @@ static char save_relocations(int target_sect_idx, Elf32_Rela *relocations, int r
 	return 1;
 }
 
-static char elf_find_undefined_symbols(elf_obj_t *obj)
+static char elf_find_undefined_symbols(elf_rel_t *obj)
 {
 	for (int i = 0; i < obj->elf.e_shnum; ++i)
 	{
@@ -266,30 +256,30 @@ void *dlopen(const char *path, int mode)
 {
 	(void)mode; //TODO: Not
 
-	elf_obj_t *obj = elf_obj_create(path, &error);
+	elf_rel_t *obj = elf_rel_create(path, &error);
 	if (!obj) return NULL;
 	
-	if (!elf_header_valid(obj) || !elf_header_compatible(obj))
+	if (!elf_rel_valid(obj))
 	{
-		elf_obj_destroy(obj);
+		elf_rel_destroy(obj);
 		return NULL;
 	}
 
 	if (!elf_load_sects(obj))
 	{
-		elf_obj_destroy(obj);
+		elf_rel_destroy(obj);
 		return NULL;
 	}
 
 	if (!elf_load_shstrings(obj))
 	{
-		elf_obj_destroy(obj);
+		elf_rel_destroy(obj);
 		return NULL;
 	}
 
 	if (!elf_find_undefined_symbols(obj))
 	{
-		elf_obj_destroy(obj);
+		elf_rel_destroy(obj);
 		return NULL;
 	}
 
@@ -308,7 +298,7 @@ void *dlopen(const char *path, int mode)
 
 int dlclose(void *handle)
 {
-	elf_obj_destroy((elf_obj_t*)handle);
+	elf_rel_destroy((elf_rel_t*)handle);
 	return 0;
 }
 
