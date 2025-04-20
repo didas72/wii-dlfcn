@@ -20,5 +20,7 @@ These limitations are not fully figured out, as the project is still very early 
 This section is for notes that I need to leave to users but have not been properly written just yet. It serves mostly as a documentation TODO list.
 
 - `.o` files only (ELF relocatables)
-- Build with `-fPIC` (not tested if it's actually needed yet)
+- Build with `-fno-pic -ffreestanding -nostdlib`
 - Partially link with `ld -r` to merge objects
+- All dependencies of loaded `.o` must be present in running `.elf`
+- No linking `.o` against other `.o` for now

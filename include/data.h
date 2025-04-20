@@ -21,18 +21,23 @@ typedef struct {
 } rel_symbol_t;
 
 typedef struct {
-	elf_file_t elf;
-	rel_symbol_t *relocations;
-	int rel_count;
-} elf_rel_t;
-
-typedef struct {
 	char *name;
 	Elf32_Addr value;
 	unsigned char bind;
 	unsigned char type;
 	int section;
 } def_symbol_t;
+
+typedef struct {
+	elf_file_t elf;
+	rel_symbol_t *relocations;
+	int rel_count;
+	def_symbol_t *symbols;
+	int sym_count;
+	//void *sect_text;
+	//void *sect_data;
+	//void *sect_rodata;
+} elf_rel_t;
 
 typedef struct {
 	elf_file_t elf;

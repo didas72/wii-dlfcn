@@ -25,7 +25,7 @@ INCLUDES	:= include
 # options for code generation
 #---------------------------------------------------------------------------------
 
-CFLAGS	= -g -fPIC -O2 -Wall -Wextra -pedantic $(MACHDEP) $(INCLUDE)
+CFLAGS	= -g -fPIC -O0 -Wall -Wextra -pedantic $(MACHDEP) $(INCLUDE)
 CXXFLAGS	=	$(CFLAGS)
 
 LDFLAGS	=	-g $(MACHDEP) -Wl,-Map,$(notdir $@).map

@@ -27,7 +27,7 @@ void test()
 
 	dbg_wait(30);
 
-	void *handle = dlopen("/wii-dlfcn/main.o", 0);
+	void *handle = dlopen("/apps/wii-dlfcn-test/main.o", 0);
 	if (!handle)
 	{
 		printf("dlopen failed: %s\n", dlerror());

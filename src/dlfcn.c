@@ -129,7 +129,105 @@ static int elf_load_shstrings(elf_file_t *elf)
 	return 1;
 }
 
-static int save_relocations(int target_sect_idx, Elf32_Rela *relocations, int rela_count, Elf32_Sym *symbols, char *sym_strs, rel_symbol_t *finals)
+static int save_symbols(elf_file_t *elf, Elf32_Sym *symbols, int sym_count, char *sym_strs, def_symbol_t *finals)
+{
+	for (int i = 1; i < sym_count; ++i)
+	{
+		Elf32_Sym *symbol = &symbols[i];
+		def_symbol_t *final = &finals[i];
+
+		//Find symbol name
+		char *name = ELF32_ST_TYPE(symbol->st_info) == STT_SECTION ? &elf->sh_strings[elf->sects[symbol->st_shndx].sh_name] : &sym_strs[symbol->st_name];
+
+		//Copy data
+		final->name = strdup(name);
+		final->value = symbol->st_value;
+		final->bind = ELF32_ST_BIND(symbol->st_info);
+		final->type = ELF32_ST_TYPE(symbol->st_info);
+		final->section = symbol->st_shndx;
+	}
+
+	return 1;
+}
+
+static int elf_find_defined_symbols(elf_exec_t *exec)
+{
+	//Skip NULL section
+	for (int i = 1; i < exec->elf.header.e_shnum; ++i)
+	{
+		Elf32_Shdr *sym_sect = &exec->elf.sects[i];
+
+		//Skip non symbol sections
+		if (sym_sect->sh_type != SHT_SYMTAB) continue;
+
+		int sym_count = sym_sect->sh_size / sizeof(Elf32_Sym);
+		Elf32_Shdr *symstr_sect = &exec->elf.sects[sym_sect->sh_link];
+
+		//Sanity check entsize
+		if (sym_sect->sh_entsize != sizeof(Elf32_Sym))
+		{
+			error = "Invalid entsize for symtab";
+			return 0;
+		}
+
+		//Allocate buffers
+		Elf32_Sym *symbols = malloc(sym_sect->sh_size);
+		char *sym_strs = malloc(symstr_sect->sh_size);
+
+		if (!symbols || !sym_strs)
+		{
+			error = "Failed to alloc space for symbols or symbol strings";
+			free(symbols);
+			free(sym_strs);
+			return 0;
+		}
+
+		//Read data
+		fseek(exec->elf.file, sym_sect->sh_offset, SEEK_SET);
+		if (sym_sect->sh_size != fread(symbols, 1, sym_sect->sh_size, exec->elf.file))
+		{
+			error = "Failed to read symbols";
+			free(symbols);
+			free(sym_strs);
+			return 0;
+		}
+		fseek(exec->elf.file, symstr_sect->sh_offset, SEEK_SET);
+		if (symstr_sect->sh_size != fread(sym_strs, 1, symstr_sect->sh_size, exec->elf.file))
+		{
+			error = "Failed to read symbol strings";
+			free(symbols);
+			free(sym_strs);
+			return 0;
+		}
+
+		//Grow (or alloc) symbols vector
+		int old_size = exec->sym_count;
+		int new_size = old_size + sym_count - 1; //Skip NULL symbol
+		def_symbol_t *tmp = realloc(exec->symbols, new_size * sizeof(def_symbol_t));
+		if (!tmp)
+		{
+			error = "Failed to grow symbol list";
+			free(symbols);
+			free(sym_strs);
+			return 0;
+		}
+		exec->symbols = tmp;
+		exec->sym_count = new_size;
+
+		//Interpret data (skipping NULL symbol)
+		char success = save_symbols(&exec->elf, &symbols[1], sym_count - 1, sym_strs, &exec->symbols[old_size]);
+
+		//Cleanup
+		free(symbols);
+		free(sym_strs);
+
+		if (!success) return 0;
+	}
+
+	return 1;
+}
+
+static int save_relocations(elf_file_t *elf, int target_sect_idx, Elf32_Rela *relocations, int rela_count, Elf32_Sym *symbols, char *sym_strs, rel_symbol_t *finals)
 {
 	for (int i = 0; i < rela_count; ++i)
 	{
@@ -139,7 +237,7 @@ static int save_relocations(int target_sect_idx, Elf32_Rela *relocations, int re
 		//Find symbol name
 		int sym_idx = ELF32_R_SYM(rela->r_info);
 		Elf32_Sym *symbol = &symbols[sym_idx];
-		char *name = &sym_strs[symbol->st_name];
+		char *name = ELF32_ST_TYPE(symbol->st_info) == STT_SECTION ? &elf->sh_strings[elf->sects[symbol->st_shndx].sh_name] : &sym_strs[symbol->st_name];
 
 		//Copy data
 		final->name = strdup(name);
@@ -152,9 +250,10 @@ static int save_relocations(int target_sect_idx, Elf32_Rela *relocations, int re
 	return 1;
 }
 
-static int elf_find_undefined_symbols(elf_rel_t *obj)
+static int elf_find_relocations(elf_rel_t *obj)
 {
-	for (int i = 0; i < obj->elf.header.e_shnum; ++i)
+	//Skip NULL section
+	for (int i = 1; i < obj->elf.header.e_shnum; ++i)
 	{
 		Elf32_Shdr *rela_sect = &obj->elf.sects[i];
 		char *sect_name = &obj->elf.sh_strings[rela_sect->sh_name];
@@ -237,7 +336,7 @@ static int elf_find_undefined_symbols(elf_rel_t *obj)
 		obj->rel_count = new_size;
 
 		//Interpret data
-		char success = save_relocations(i, relocations, rela_count, symbols, sym_strs, &obj->relocations[old_size]);
+		char success = save_relocations(&obj->elf, i, relocations, rela_count, symbols, sym_strs, &obj->relocations[old_size]);
 
 		//Cleanup
 		free(relocations);
@@ -250,38 +349,18 @@ static int elf_find_undefined_symbols(elf_rel_t *obj)
 	return 1;
 }
 
-static int save_symbols(Elf32_Sym *symbols, int sym_count, char *sym_strs, def_symbol_t *finals)
+static int elf_find_local_symbols(elf_rel_t *obj)
 {
-	for (int i = 0; i < sym_count; ++i)
+	//Skip NULL section
+	for (int i = 1; i < obj->elf.header.e_shnum; ++i)
 	{
-		Elf32_Sym *symbol = &symbols[i];
-		def_symbol_t *final = &finals[i];
-
-		//Find symbol name
-		char *name = &sym_strs[symbol->st_name];
-
-		//Copy data
-		final->name = strdup(name);
-		final->value = symbol->st_value;
-		final->bind = ELF32_ST_BIND(symbol->st_info);
-		final->type = ELF32_ST_TYPE(symbol->st_info);
-		final->section = symbol->st_shndx;
-	}
-
-	return 1;
-}
-
-static int elf_find_defined_symbols(elf_exec_t *exec)
-{
-	for (int i = 0; i < exec->elf.header.e_shnum; ++i)
-	{
-		Elf32_Shdr *sym_sect = &exec->elf.sects[i];
+		Elf32_Shdr *sym_sect = &obj->elf.sects[i];
 
 		//Skip non symbol sections
 		if (sym_sect->sh_type != SHT_SYMTAB) continue;
 
 		int sym_count = sym_sect->sh_size / sizeof(Elf32_Sym);
-		Elf32_Shdr *symstr_sect = &exec->elf.sects[sym_sect->sh_link];
+		Elf32_Shdr *symstr_sect = &obj->elf.sects[sym_sect->sh_link];
 
 		//Sanity check entsize
 		if (sym_sect->sh_entsize != sizeof(Elf32_Sym))
@@ -303,16 +382,16 @@ static int elf_find_defined_symbols(elf_exec_t *exec)
 		}
 
 		//Read data
-		fseek(exec->elf.file, sym_sect->sh_offset, SEEK_SET);
-		if (sym_sect->sh_size != fread(symbols, 1, sym_sect->sh_size, exec->elf.file))
+		fseek(obj->elf.file, sym_sect->sh_offset, SEEK_SET);
+		if (sym_sect->sh_size != fread(symbols, 1, sym_sect->sh_size, obj->elf.file))
 		{
 			error = "Failed to read symbols";
 			free(symbols);
 			free(sym_strs);
 			return 0;
 		}
-		fseek(exec->elf.file, symstr_sect->sh_offset, SEEK_SET);
-		if (symstr_sect->sh_size != fread(sym_strs, 1, symstr_sect->sh_size, exec->elf.file))
+		fseek(obj->elf.file, symstr_sect->sh_offset, SEEK_SET);
+		if (symstr_sect->sh_size != fread(sym_strs, 1, symstr_sect->sh_size, obj->elf.file))
 		{
 			error = "Failed to read symbol strings";
 			free(symbols);
@@ -321,9 +400,9 @@ static int elf_find_defined_symbols(elf_exec_t *exec)
 		}
 
 		//Grow (or alloc) symbols vector
-		int old_size = exec->sym_count;
-		int new_size = old_size + sym_count;
-		def_symbol_t *tmp = realloc(exec->symbols, new_size * sizeof(def_symbol_t));
+		int old_size = obj->sym_count;
+		int new_size = old_size + sym_count - 1; //Skip NULL symbol
+		def_symbol_t *tmp = realloc(obj->symbols, new_size * sizeof(def_symbol_t));
 		if (!tmp)
 		{
 			error = "Failed to grow symbol list";
@@ -331,17 +410,61 @@ static int elf_find_defined_symbols(elf_exec_t *exec)
 			free(sym_strs);
 			return 0;
 		}
-		exec->symbols = tmp;
-		exec->sym_count = new_size;
+		obj->symbols = tmp;
+		obj->sym_count = new_size;
 
-		//Interpret data
-		char success = save_symbols(symbols, sym_count, sym_strs, &exec->symbols[old_size]);
+		//Interpret data (skipping NULL symbol)
+		char success = save_symbols(&obj->elf, &symbols[1], sym_count - 1, sym_strs, &obj->symbols[old_size]);
 
 		//Cleanup
 		free(symbols);
 		free(sym_strs);
 
 		if (!success) return 0;
+	}
+
+	return 1;
+}
+
+static int load_needed_sections(elf_rel_t *obj)
+{
+	//TODO: Implement:
+	//Load .text* [aligned]
+	//Load .data* and .rodata* [aligned]
+	(void)obj;
+	return 1;
+}
+
+static int apply_relocations(elf_rel_t *obj)
+{
+	printf("Matching %d relocations:\n", obj->rel_count);
+	for (int i = 0; i < obj->rel_count; ++i)
+	{
+		rel_symbol_t *rel = &obj->relocations[i];
+		def_symbol_t *sym = NULL;
+
+		//Find matching symbol //TODO: Hashtable
+		for (int j = 0; j < obj->sym_count && !sym; ++j)
+		{
+			if (strcmp(obj->symbols[j].name, rel->name))
+				continue;
+			
+			sym = &obj->symbols[j];
+		}
+		for (int j = 0; j < self->sym_count && !sym; ++j)
+		{
+			if (strcmp(self->symbols[j].name, rel->name))
+				continue;
+			
+			sym = &self->symbols[j];
+		}
+
+		if (!sym)
+			return 0;
+
+		printf("Matched rel/sym %s\n", rel->name);
+
+		//TODO: Actually apply relocation
 	}
 
 	return 1;
@@ -385,14 +508,18 @@ int dlinit(char *own_path)
 	}
 
 	//TODO: Remove
-	printf("Found %d symbols:\n", exec->sym_count);
-	for (int i = 0; i < exec->sym_count && i < 16; ++i)
+	printf("Found %d symbols, showing some functions:\n", exec->sym_count);
+	int printed = 0;
+	for (int i = 0; i < exec->sym_count && printed < 8; ++i)
 	{
 		def_symbol_t *sym = &exec->symbols[i];
+
+		if (sym->type != STT_FUNC)
+			continue;
+
+		++printed;
 		printf("S%02d: name=%s value=0x%x bind=%d type=%d section=%d\n",
 			i, sym->name, sym->value, sym->bind, sym->type, sym->section);
-		//REVIEW: Section might not actually be section
-		//FIXME: Names not showing
 	}
 
 	self = exec;
@@ -425,7 +552,13 @@ void *dlopen(const char *path, int mode)
 		return NULL;
 	}
 
-	if (!elf_find_undefined_symbols(obj))
+	if (!elf_find_local_symbols(obj))
+	{
+		elf_rel_destroy(obj);
+		return NULL;
+	}
+
+	if (!elf_find_relocations(obj))
 	{
 		elf_rel_destroy(obj);
 		return NULL;
@@ -440,12 +573,23 @@ void *dlopen(const char *path, int mode)
 			i, sym->name, sym->rel_type, sym->section, sym->offset, sym->addend);
 	}
 
+	if (!load_needed_sections(obj))
+	{
+		elf_rel_destroy(obj);
+		return NULL;
+	}
+
 	//TODO: Finish implementing. Must:
-	//Load .text* [aligned]
-	//Load .data* and .rodata* [aligned]
 	//Reserve .bss* [aligned]
 	//Match symbols on loaded executable
+	
 	//Apply relocations
+	if (!apply_relocations(obj))
+	{
+		elf_rel_destroy(obj);
+		return NULL;
+	}
+
 	return obj;
 }
 
