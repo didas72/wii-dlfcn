@@ -39,7 +39,7 @@ LIBS	:=	-lsus -lwiiuse -lbte -lfat -logc -lm
 # list of directories containing libraries, this must be the top level containing
 # include and lib
 #---------------------------------------------------------------------------------
-LIBDIRS	:= $(CURDIR)/$(BUILD)/libsus
+LIBDIRS	:= $(CURDIR)/$(BUILD)/sus
 
 #---------------------------------------------------------------------------------
 # no real need to edit anything past this point unless you need to add additional
@@ -93,17 +93,17 @@ export INCLUDE	:=	$(foreach dir,$(INCLUDES), -iquote $(CURDIR)/$(dir)) \
 export LIBPATHS	:= -L$(LIBOGC_LIB) $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
 export OUTPUT	:=	$(CURDIR)/$(TARGET)
-.PHONY: $(BUILD) clean $(BUILD)/libsus
+.PHONY: $(BUILD) clean $(BUILD)/sus
 
 #---------------------------------------------------------------------------------
-$(BUILD)/libsus: ../.gitmodules
+$(BUILD)/sus: ../.gitmodules
 	@echo libsus
 	@$(MAKE) -C ../libsus CC=powerpc-eabi-gcc build > /dev/null
-	@mkdir -p $(BUILD)/libsus/lib $(BUILD)/libsus/
-	@cp -f ../libsus/build/libsus.a $(BUILD)/libsus/lib/
-	@cp -rf ../libsus/include $(BUILD)/libsus/include/
+	@mkdir -p $(BUILD)/sus/lib $(BUILD)/sus/
+	@cp -f ../libsus/build/libsus.a $(BUILD)/sus/lib/
+	@cp -rf ../libsus/include $(BUILD)/sus/include/
 #---------------------------------------------------------------------------------
-$(BUILD): $(BUILD)/libsus
+$(BUILD): $(BUILD)/sus
 	@[ -d $@ ] || mkdir -p $@
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
