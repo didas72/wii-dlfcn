@@ -3,6 +3,8 @@
 
 #include <stdio.h>
 
+#include <sus/ivector.h>
+
 #include "elf.h"
 
 typedef struct {
@@ -30,10 +32,10 @@ typedef struct {
 
 typedef struct {
 	elf_file_t elf;
-	rel_symbol_t *relocations;
-	int rel_count;
-	def_symbol_t *symbols;
-	int sym_count;
+	//ivector_t<rel_symbol_t>
+	ivector_t *relocations;
+	//ivector_t<def_symbol_t>
+	ivector_t *symbols;
 	//void *sect_text;
 	//void *sect_data;
 	//void *sect_rodata;
@@ -41,8 +43,8 @@ typedef struct {
 
 typedef struct {
 	elf_file_t elf;
-	def_symbol_t *symbols;
-	int sym_count;
+	//ivector_t<def_symbol_t>
+	ivector_t *symbols;
 } elf_exec_t;
 
 elf_rel_t *elf_rel_create(const char *path, char **error);

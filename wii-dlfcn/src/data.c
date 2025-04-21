@@ -2,6 +2,8 @@
 
 #include <stdlib.h>
 
+#include <sus/ivector.h>
+
 #include "elf.h"
 
 elf_rel_t *elf_rel_create(const char *path, char **error)
@@ -39,6 +41,17 @@ elf_rel_t *elf_rel_create(const char *path, char **error)
 		return NULL;
 	}
 
+	obj->relocations = ivector_create(sizeof(rel_symbol_t));
+	obj->symbols = ivector_create(sizeof(def_symbol_t));
+	if (!obj->relocations || !obj->symbols)
+	{
+		*error = "Failed to allocate relocation or symbol vectors.";
+		ivector_destroy(obj->relocations);
+		ivector_destroy(obj->symbols);
+		fclose(obj->elf.file); free(obj);
+		return NULL;
+	}
+
 	return obj;
 }
 void elf_rel_destroy(elf_rel_t *obj)
@@ -46,7 +59,8 @@ void elf_rel_destroy(elf_rel_t *obj)
 	if (obj->elf.file) fclose(obj->elf.file);
 	if (obj->elf.sects) free(obj->elf.sects);
 	if (obj->elf.sh_strings) free(obj->elf.sh_strings);
-	if (obj->relocations) free(obj->relocations);
+	if (obj->relocations) ivector_destroy(obj->relocations);
+	if (obj->symbols) ivector_destroy(obj->symbols);
 	free(obj);
 }
 
@@ -85,6 +99,15 @@ elf_exec_t *elf_exec_create(const char *path, char **error)
 		return NULL;
 	}
 
+	exec->symbols = ivector_create(sizeof(def_symbol_t));
+	if (!exec->symbols)
+	{
+		*error = "Failed to allocate symbol vector.";
+		ivector_destroy(exec->symbols);
+		fclose(exec->elf.file); free(exec);
+		return NULL;
+	}
+
 	return exec;
 }
 void elf_exec_destroy(elf_exec_t *exec)
@@ -92,6 +115,6 @@ void elf_exec_destroy(elf_exec_t *exec)
 	if (exec->elf.file) fclose(exec->elf.file);
 	if (exec->elf.sects) free(exec->elf.sects);
 	if (exec->elf.sh_strings) free(exec->elf.sh_strings);
-	if (exec->symbols) free(exec->symbols);
+	if (exec->symbols) ivector_destroy(exec->symbols);
 	free(exec);
 }

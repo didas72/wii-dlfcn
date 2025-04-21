@@ -6,6 +6,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <sus/ivector.h>
+
 #include "data.h"
 #include "elf.h"
 #include "mmu_dump.h"
@@ -129,22 +131,25 @@ static int elf_load_shstrings(elf_file_t *elf)
 	return 1;
 }
 
-static int save_symbols(elf_file_t *elf, Elf32_Sym *symbols, int sym_count, char *sym_strs, def_symbol_t *finals)
+static int save_symbols(elf_file_t *elf, Elf32_Sym *symbols, int sym_count, char *sym_strs, ivector_t *finals)
 {
 	for (int i = 1; i < sym_count; ++i)
 	{
 		Elf32_Sym *symbol = &symbols[i];
-		def_symbol_t *final = &finals[i];
+		def_symbol_t final = { 0 };
 
 		//Find symbol name
 		char *name = ELF32_ST_TYPE(symbol->st_info) == STT_SECTION ? &elf->sh_strings[elf->sects[symbol->st_shndx].sh_name] : &sym_strs[symbol->st_name];
 
 		//Copy data
-		final->name = strdup(name);
-		final->value = symbol->st_value;
-		final->bind = ELF32_ST_BIND(symbol->st_info);
-		final->type = ELF32_ST_TYPE(symbol->st_info);
-		final->section = symbol->st_shndx;
+		final.name = strdup(name);
+		final.value = symbol->st_value;
+		final.bind = ELF32_ST_BIND(symbol->st_info);
+		final.type = ELF32_ST_TYPE(symbol->st_info);
+		final.section = symbol->st_shndx;
+
+		//Save symbol
+		ivector_append(finals, &final);
 	}
 
 	return 1;
@@ -200,22 +205,8 @@ static int elf_find_defined_symbols(elf_exec_t *exec)
 			return 0;
 		}
 
-		//Grow (or alloc) symbols vector
-		int old_size = exec->sym_count;
-		int new_size = old_size + sym_count - 1; //Skip NULL symbol
-		def_symbol_t *tmp = realloc(exec->symbols, new_size * sizeof(def_symbol_t));
-		if (!tmp)
-		{
-			error = "Failed to grow symbol list";
-			free(symbols);
-			free(sym_strs);
-			return 0;
-		}
-		exec->symbols = tmp;
-		exec->sym_count = new_size;
-
 		//Interpret data (skipping NULL symbol)
-		char success = save_symbols(&exec->elf, &symbols[1], sym_count - 1, sym_strs, &exec->symbols[old_size]);
+		char success = save_symbols(&exec->elf, &symbols[1], sym_count - 1, sym_strs, exec->symbols);
 
 		//Cleanup
 		free(symbols);
@@ -227,12 +218,12 @@ static int elf_find_defined_symbols(elf_exec_t *exec)
 	return 1;
 }
 
-static int save_relocations(elf_file_t *elf, int target_sect_idx, Elf32_Rela *relocations, int rela_count, Elf32_Sym *symbols, char *sym_strs, rel_symbol_t *finals)
+static int save_relocations(elf_file_t *elf, int target_sect_idx, Elf32_Rela *relocations, int rela_count, Elf32_Sym *symbols, char *sym_strs, ivector_t *finals)
 {
 	for (int i = 0; i < rela_count; ++i)
 	{
 		Elf32_Rela *rela = &relocations[i];
-		rel_symbol_t *final = &finals[i];
+		rel_symbol_t final = { 0 };
 		
 		//Find symbol name
 		int sym_idx = ELF32_R_SYM(rela->r_info);
@@ -240,11 +231,14 @@ static int save_relocations(elf_file_t *elf, int target_sect_idx, Elf32_Rela *re
 		char *name = ELF32_ST_TYPE(symbol->st_info) == STT_SECTION ? &elf->sh_strings[elf->sects[symbol->st_shndx].sh_name] : &sym_strs[symbol->st_name];
 
 		//Copy data
-		final->name = strdup(name);
-		final->section = target_sect_idx;
-		final->offset = rela->r_offset;
-		final->rel_type = ELF32_R_TYPE(rela->r_info);
-		final->addend = rela->r_addend;
+		final.name = strdup(name);
+		final.section = target_sect_idx;
+		final.offset = rela->r_offset;
+		final.rel_type = ELF32_R_TYPE(rela->r_info);
+		final.addend = rela->r_addend;
+
+		//Save relocation
+		ivector_append(finals, &final);
 	}
 
 	return 1;
@@ -320,23 +314,8 @@ static int elf_find_relocations(elf_rel_t *obj)
 			return 0;
 		}
 
-		//Grow (or alloc) relocations vector
-		int old_size = obj->rel_count;
-		int new_size = old_size + rela_count;
-		rel_symbol_t *tmp = realloc(obj->relocations, new_size * sizeof(rel_symbol_t));
-		if (!tmp)
-		{
-			error = "Failed to grow relocations list";
-			free(relocations);
-			free(symbols);
-			free(sym_strs);
-			return 0;
-		}
-		obj->relocations = tmp;
-		obj->rel_count = new_size;
-
 		//Interpret data
-		char success = save_relocations(&obj->elf, i, relocations, rela_count, symbols, sym_strs, &obj->relocations[old_size]);
+		char success = save_relocations(&obj->elf, i, relocations, rela_count, symbols, sym_strs, obj->relocations);
 
 		//Cleanup
 		free(relocations);
@@ -399,22 +378,8 @@ static int elf_find_local_symbols(elf_rel_t *obj)
 			return 0;
 		}
 
-		//Grow (or alloc) symbols vector
-		int old_size = obj->sym_count;
-		int new_size = old_size + sym_count - 1; //Skip NULL symbol
-		def_symbol_t *tmp = realloc(obj->symbols, new_size * sizeof(def_symbol_t));
-		if (!tmp)
-		{
-			error = "Failed to grow symbol list";
-			free(symbols);
-			free(sym_strs);
-			return 0;
-		}
-		obj->symbols = tmp;
-		obj->sym_count = new_size;
-
 		//Interpret data (skipping NULL symbol)
-		char success = save_symbols(&obj->elf, &symbols[1], sym_count - 1, sym_strs, &obj->symbols[old_size]);
+		char success = save_symbols(&obj->elf, &symbols[1], sym_count - 1, sym_strs, obj->symbols);
 
 		//Cleanup
 		free(symbols);
@@ -437,26 +402,30 @@ static int load_needed_sections(elf_rel_t *obj)
 
 static int apply_relocations(elf_rel_t *obj)
 {
-	printf("Matching %d relocations:\n", obj->rel_count);
-	for (int i = 0; i < obj->rel_count; ++i)
+	rel_symbol_t *relocations = obj->relocations->data;
+
+	printf("Matching %d relocations:\n", obj->relocations->count);
+	for (size_t i = 0; i < obj->relocations->count; ++i)
 	{
-		rel_symbol_t *rel = &obj->relocations[i];
+		rel_symbol_t *rel = &relocations[i];
 		def_symbol_t *sym = NULL;
+		def_symbol_t *local_syms = obj->symbols->data;
+		def_symbol_t *global_syms = self->symbols->data;
 
 		//Find matching symbol //TODO: Hashtable
-		for (int j = 0; j < obj->sym_count && !sym; ++j)
+		for (size_t j = 0; j < obj->symbols->count && !sym; ++j)
 		{
-			if (strcmp(obj->symbols[j].name, rel->name))
+			if (strcmp(local_syms[j].name, rel->name))
 				continue;
 			
-			sym = &obj->symbols[j];
+			sym = &local_syms[j];
 		}
-		for (int j = 0; j < self->sym_count && !sym; ++j)
+		for (size_t j = 0; j < self->symbols->count && !sym; ++j)
 		{
-			if (strcmp(self->symbols[j].name, rel->name))
+			if (strcmp(global_syms[j].name, rel->name))
 				continue;
 			
-			sym = &self->symbols[j];
+			sym = &global_syms[j];
 		}
 
 		if (!sym)
@@ -508,11 +477,12 @@ int dlinit(char *own_path)
 	}
 
 	//TODO: Remove
-	printf("Found %d symbols, showing some functions:\n", exec->sym_count);
+	def_symbol_t *global_symbols = exec->symbols->data;
+	printf("Found %d symbols, showing some functions:\n", exec->symbols->count);
 	int printed = 0;
-	for (int i = 0; i < exec->sym_count && printed < 8; ++i)
+	for (size_t i = 0; i < exec->symbols->count && printed < 8; ++i)
 	{
-		def_symbol_t *sym = &exec->symbols[i];
+		def_symbol_t *sym = &global_symbols[i];
 
 		if (sym->type != STT_FUNC)
 			continue;
@@ -565,10 +535,11 @@ void *dlopen(const char *path, int mode)
 	}
 
 	//TODO: Remove
-	printf("Selected %d relocations:\n", obj->rel_count);
-	for (int i = 0; i < obj->rel_count; ++i)
+	rel_symbol_t *local_symbols = obj->relocations->data;
+	printf("Selected %d relocations:\n", obj->relocations->count);
+	for (size_t i = 0; i < obj->relocations->count; ++i)
 	{
-		rel_symbol_t *sym = &obj->relocations[i];
+		rel_symbol_t *sym = &local_symbols[i];
 		printf("R%02d: name=%s rel_type=%d sect=%d off=0x%x addend=0x%x\n",
 			i, sym->name, sym->rel_type, sym->section, sym->offset, sym->addend);
 	}
