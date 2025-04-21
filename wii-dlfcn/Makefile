@@ -19,7 +19,7 @@ TARGET		:=	$(notdir $(CURDIR))
 BUILD		:=	build
 SOURCES		:=	src
 DATA		:=	data
-INCLUDES	:= include
+INCLUDES	:= include 
 
 #---------------------------------------------------------------------------------
 # options for code generation
@@ -33,13 +33,13 @@ LDFLAGS	=	-g $(MACHDEP) -Wl,-Map,$(notdir $@).map
 #---------------------------------------------------------------------------------
 # any extra libraries we wish to link with the project
 #---------------------------------------------------------------------------------
-LIBS	:=	-lwiiuse -lbte -lfat -logc -lm
+LIBS	:=	-lsus -lwiiuse -lbte -lfat -logc -lm
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
 # include and lib
 #---------------------------------------------------------------------------------
-LIBDIRS	:=
+LIBDIRS	:= $(CURDIR)/$(BUILD)/libsus
 
 #---------------------------------------------------------------------------------
 # no real need to edit anything past this point unless you need to add additional
@@ -93,10 +93,17 @@ export INCLUDE	:=	$(foreach dir,$(INCLUDES), -iquote $(CURDIR)/$(dir)) \
 export LIBPATHS	:= -L$(LIBOGC_LIB) $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
 export OUTPUT	:=	$(CURDIR)/$(TARGET)
-.PHONY: $(BUILD) clean
+.PHONY: $(BUILD) clean $(BUILD)/libsus
 
 #---------------------------------------------------------------------------------
-$(BUILD):
+$(BUILD)/libsus: ../.gitmodules
+	@echo libsus
+	@$(MAKE) -C ../libsus CC=powerpc-eabi-gcc build > /dev/null
+	@mkdir -p $(BUILD)/libsus/lib $(BUILD)/libsus/
+	@cp -f ../libsus/build/libsus.a $(BUILD)/libsus/lib/
+	@cp -rf ../libsus/include $(BUILD)/libsus/include/
+#---------------------------------------------------------------------------------
+$(BUILD): $(BUILD)/libsus
 	@[ -d $@ ] || mkdir -p $@
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
@@ -104,6 +111,7 @@ $(BUILD):
 clean:
 	@echo clean ...
 	@rm -fr $(BUILD) $(OUTPUT).elf $(OUTPUT).dol
+	@$(MAKE) -C ../libsus clean > /dev/null
 
 #---------------------------------------------------------------------------------
 run:
