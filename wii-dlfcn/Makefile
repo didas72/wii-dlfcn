@@ -25,7 +25,7 @@ INCLUDES	:= include
 # options for code generation
 #---------------------------------------------------------------------------------
 
-CFLAGS	= -g -O0 -Wall -Wextra -pedantic $(MACHDEP) $(INCLUDE)
+CFLAGS	= -g -O0 -Wall -Wextra -pedantic -fno-function-sections -fno-data-sections $(MACHDEP) $(INCLUDE)
 CXXFLAGS	=	$(CFLAGS)
 
 LDFLAGS	=	-g $(MACHDEP) -Wl,-Map,$(notdir $@).map
@@ -97,7 +97,6 @@ export OUTPUT	:=	$(CURDIR)/$(TARGET)
 
 #---------------------------------------------------------------------------------
 $(BUILD)/sus: ../.gitmodules
-#	echo "$(INCLUDE)"
 	@echo libsus
 	@$(MAKE) -C ../libsus CC=powerpc-eabi-gcc "CFLAGS=$(CFLAGS)" build > /dev/null
 	@mkdir -p $(BUILD)/sus/lib $(BUILD)/sus/include/sus

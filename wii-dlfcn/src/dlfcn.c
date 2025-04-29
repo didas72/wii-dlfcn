@@ -400,10 +400,61 @@ static int elf_find_local_symbols(elf_rel_t *obj)
 static int load_needed_sections(elf_rel_t *obj)
 {
 	//TODO: Implement:
-	//Load .text* [aligned]
-	//Load .data* and .rodata* [aligned]
-	(void)obj;
+	//Load .rodata* [aligned]
+	
+	//REVIEW: For now, only expect exactly one of each .text and .data sections. .rodata isn't solved yet, as it still comes with suffixes
+	Elf32_Shdr *sect_text = NULL;
+	Elf32_Shdr *sect_data = NULL;
+
+	//Find relevant sections
+	for (int i = 0; i < obj->elf.header.e_shnum; ++i)
+	{
+		Elf32_Shdr *sect = &obj->elf.sects[i];
+		char *name = &obj->elf.sh_strings[sect->sh_name];
+		if (!strcmp(".text", name))
+		{
+			sect_text = sect;
+			continue;
+		}
+		if (!strcmp(".data", name))
+		{
+			sect_data = sect;
+			continue;
+		}
+	}
+
+	if (!sect_text || !sect_data)
+	{
+		error = "Could not find .text or .data";
+		return 0;
+	}
+
+	obj->sect_text = aligned_alloc(sect_text->sh_addralign, sect_text->sh_size);
+	obj->sect_data = aligned_alloc(sect_data->sh_addralign, sect_data->sh_size);
+
+	if (!obj->sect_text || !obj->sect_data)
+	{
+		error = "Failed to allocate memory for sections";
+		goto _load_needed_sections_error;
+	}
+
+	if (sect_text->sh_size != fread(obj->sect_text, 1, sect_text->sh_size, obj->elf.file))
+	{
+		error = "Failed to load .text";
+		goto _load_needed_sections_error;
+	}
+	if (sect_data->sh_size != fread(obj->sect_data, 1, sect_data->sh_size, obj->elf.file))
+	{
+		error = "Failed to load .data";
+		goto _load_needed_sections_error;
+	}
+
 	return 1;
+	
+_load_needed_sections_error:
+	free(obj->sect_text); obj->sect_text = NULL;
+	free(obj->sect_data); obj->sect_data = NULL;
+	return 0;
 }
 
 static int apply_relocations(elf_rel_t *obj)

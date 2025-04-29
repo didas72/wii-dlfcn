@@ -36,8 +36,8 @@ typedef struct {
 	ivector_t *relocations;
 	//ivector_t<def_symbol_t>
 	ivector_t *symbols;
-	//void *sect_text;
-	//void *sect_data;
+	void *sect_text;
+	void *sect_data;
 	//void *sect_rodata;
 } elf_rel_t;
 
