@@ -137,21 +137,26 @@ static int save_symbols(elf_file_t *elf, Elf32_Sym *symbols, int sym_count, char
 	{
 		Elf32_Sym *symbol = &symbols[i];
 		def_symbol_t final = { 0 };
+		int type = ELF32_ST_TYPE(symbol->st_info);
+
+		//Skip unneeded symbols
+		if (type == STT_NOTYPE || type == STT_FILE) continue;
 
 		//Find symbol name
-		char *name = ELF32_ST_TYPE(symbol->st_info) == STT_SECTION ? &elf->sh_strings[elf->sects[symbol->st_shndx].sh_name] : &sym_strs[symbol->st_name];
+		char *name = type == STT_SECTION ? &elf->sh_strings[elf->sects[symbol->st_shndx].sh_name] : &sym_strs[symbol->st_name];
 
 		//Copy data
 		final.name = strdup(name);
 		final.value = symbol->st_value;
 		final.bind = ELF32_ST_BIND(symbol->st_info);
-		final.type = ELF32_ST_TYPE(symbol->st_info);
+		final.type = type;
 		final.section = symbol->st_shndx;
 
 		//Save symbol
 		ivector_append(finals, &final);
 	}
 
+	ivector_trim(finals);
 	return 1;
 }
 
@@ -241,6 +246,7 @@ static int save_relocations(elf_file_t *elf, int target_sect_idx, Elf32_Rela *re
 		ivector_append(finals, &final);
 	}
 
+	ivector_trim(finals);
 	return 1;
 }
 
