@@ -466,7 +466,7 @@ static int apply_relocations(elf_rel_t *obj)
 		def_symbol_t *local_syms = obj->symbols->data;
 		def_symbol_t *global_syms = self->symbols->data;
 
-		//Find matching symbol //TODO: Hashtable
+		//Find matching symbol //OPTIMIZE: Hashtable
 		for (size_t j = 0; j < obj->symbols->count && !sym; ++j)
 		{
 			if (strcmp(local_syms[j].name, rel->name))
