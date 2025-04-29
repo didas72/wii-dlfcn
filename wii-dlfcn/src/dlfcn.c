@@ -10,7 +10,6 @@
 
 #include "data.h"
 #include "elf.h"
-#include "mmu_dump.h"
 
 static char *error = NULL;
 static elf_exec_t *self = NULL;
@@ -399,10 +398,8 @@ static int elf_find_local_symbols(elf_rel_t *obj)
 
 static int load_needed_sections(elf_rel_t *obj)
 {
-	//TODO: Implement:
-	//Load .rodata* [aligned]
-	
-	//REVIEW: For now, only expect exactly one of each .text and .data sections. .rodata isn't solved yet, as it still comes with suffixes
+	//REVIEW: For now, only expect exactly one of each .text and .data sections.
+	//TODO: Load .rodata* [aligned] not solved yet, as it .rodata still comes separated
 	Elf32_Shdr *sect_text = NULL;
 	Elf32_Shdr *sect_data = NULL;
 
@@ -450,7 +447,7 @@ static int load_needed_sections(elf_rel_t *obj)
 	}
 
 	return 1;
-	
+
 _load_needed_sections_error:
 	free(obj->sect_text); obj->sect_text = NULL;
 	free(obj->sect_data); obj->sect_data = NULL;
@@ -510,28 +507,16 @@ int dlinit(char *own_path)
 	if (!exec) return 1;
 
 	if (!elf_exec_valid(exec))
-	{
-		elf_exec_destroy(exec);
-		return 1;
-	}
+		goto _dlinit_error;
 
 	if (!elf_load_sects(&exec->elf))
-	{
-		elf_exec_destroy(exec);
-		return 1;
-	}
+		goto _dlinit_error;
 	
 	if (!elf_load_shstrings(&exec->elf))
-	{
-		elf_exec_destroy(exec);
-		return 1;
-	}
+		goto _dlinit_error;
 
 	if (!elf_find_defined_symbols(exec))
-	{
-		elf_exec_destroy(exec);
-		return 1;
-	}
+		goto _dlinit_error;
 
 	//TODO: Remove
 	def_symbol_t *global_symbols = exec->symbols->data;
@@ -551,6 +536,10 @@ int dlinit(char *own_path)
 
 	self = exec;
 	return 0;
+
+_dlinit_error:
+	elf_exec_destroy(exec);
+	return 1;
 }
 
 void *dlopen(const char *path, int mode)
@@ -562,34 +551,19 @@ void *dlopen(const char *path, int mode)
 	if (!obj) return NULL;
 	
 	if (!elf_rel_valid(obj))
-	{
-		elf_rel_destroy(obj);
-		return NULL;
-	}
+		goto _dlopen_error;
 
 	if (!elf_load_sects(&obj->elf))
-	{
-		elf_rel_destroy(obj);
-		return NULL;
-	}
+		goto _dlopen_error;
 
 	if (!elf_load_shstrings(&obj->elf))
-	{
-		elf_rel_destroy(obj);
-		return NULL;
-	}
+		goto _dlopen_error;
 
 	if (!elf_find_local_symbols(obj))
-	{
-		elf_rel_destroy(obj);
-		return NULL;
-	}
+		goto _dlopen_error;
 
 	if (!elf_find_relocations(obj))
-	{
-		elf_rel_destroy(obj);
-		return NULL;
-	}
+		goto _dlopen_error;
 
 	//TODO: Remove
 	rel_symbol_t *local_symbols = obj->relocations->data;
@@ -602,23 +576,20 @@ void *dlopen(const char *path, int mode)
 	}
 
 	if (!load_needed_sections(obj))
-	{
-		elf_rel_destroy(obj);
-		return NULL;
-	}
+		goto _dlopen_error;
 
 	//TODO: Finish implementing. Must:
 	//Reserve .bss* [aligned]
-	//Match symbols on loaded executable
 	
 	//Apply relocations
 	if (!apply_relocations(obj))
-	{
-		elf_rel_destroy(obj);
-		return NULL;
-	}
+		goto _dlopen_error;
 
 	return obj;
+
+_dlopen_error:
+	elf_rel_destroy(obj);
+	return NULL;
 }
 
 int dlclose(void *handle)
