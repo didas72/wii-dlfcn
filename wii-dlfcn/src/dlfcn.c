@@ -10,6 +10,7 @@
 
 #include "data.h"
 #include "elf.h"
+#include "relocations.h"
 
 static char *error = NULL;
 static elf_exec_t *self = NULL;
@@ -454,6 +455,38 @@ _load_needed_sections_error:
 	return 0;
 }
 
+static int apply_relocation(elf_rel_t *obj, rel_symbol_t *relocation, def_symbol_t *symbol)
+{
+	int *target = &((char*)obj->sect_text)[relocation->offset];
+
+	int sym = (int)symbol->value;
+	int place = (int)target;
+	int addend = relocation->addend;
+
+	switch (relocation->rel_type)
+	{
+		case R_PPC_REL24:
+			RELOCATE_REL24(target, sym, place, addend);
+			break;
+
+		case R_PPC_ADDR16_HA:
+			RELOCATE_ADDR16_HA(target, sym, addend);
+			break;
+
+		case R_PPC_ADDR16_LO:
+			RELOCATE_ADDR16_LO(target, sym, addend);
+			break;
+
+		//TODO: Other relocations
+
+		default:
+			error = "Unsupported relocation type";
+			return 0;
+	}
+
+	return 1;
+}
+
 static int apply_relocations(elf_rel_t *obj)
 {
 	rel_symbol_t *relocations = obj->relocations->data;
@@ -487,7 +520,8 @@ static int apply_relocations(elf_rel_t *obj)
 
 		printf("Matched rel/sym %s\n", rel->name);
 
-		//TODO: Actually apply relocation
+		if (!apply_relocation(obj, rel, sym))
+			return 0;
 	}
 
 	return 1;
