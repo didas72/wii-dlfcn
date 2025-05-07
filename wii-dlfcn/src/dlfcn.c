@@ -457,7 +457,7 @@ _load_needed_sections_error:
 
 static int apply_relocation(elf_rel_t *obj, rel_symbol_t *relocation, def_symbol_t *symbol)
 {
-	int *target = &((char*)obj->sect_text)[relocation->offset];
+	int *target = (int*)&((char*)obj->sect_text)[relocation->offset];
 
 	int sym = (int)symbol->value;
 	int place = (int)target;
