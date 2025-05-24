@@ -37,6 +37,22 @@ void test()
 
 	dbg_wait(30);
 
+	void *data = dlsym(handle, "test_int");
+	if (!data)
+	{
+		char *err = dlerror();
+		if (err)
+			printf("dlsym returned null: %s\n", err);
+		else
+			printf("dlsym returned null with no error\n");
+		return;
+	}
+	printf("dlsym(handle, \"test_int\") = %p\n", data);
+	printf("*dlsym(handle, \"test_int\") = 0x%x\n", *(int*)data);
+	printf("dlsym success\n");
+
+	dbg_wait(30);
+
 	result = dlclose(handle);
 	if (result)
 	{

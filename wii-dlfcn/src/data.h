@@ -28,6 +28,7 @@ typedef struct {
 	unsigned char bind;
 	unsigned char type;
 	int section;
+	void *address;
 } def_symbol_t;
 
 typedef struct {
@@ -38,6 +39,7 @@ typedef struct {
 	ivector_t *symbols;
 	void *sect_text;
 	void *sect_data;
+	void *sect_sdata;
 	//void *sect_rodata;
 } elf_rel_t;
 

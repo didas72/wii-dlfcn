@@ -400,12 +400,44 @@ static int elf_find_local_symbols(elf_rel_t *obj)
 	return 1;
 }
 
+static int compute_symbol_addresses(elf_rel_t *obj)
+{//TODO: Adjust to allow multiple .text and .data segments
+	size_t sym_count = ivector_get_count(obj->symbols);
+
+	for (size_t i = 0; i < sym_count; ++i)
+	{
+		def_symbol_t* sym = ivector_get(obj->symbols, i);
+		Elf32_Shdr *sect = &obj->elf.sects[sym->section];
+		char *sect_name = &obj->elf.sh_strings[sect->sh_name];
+		if (!strcmp(".text", sect_name))
+		{
+			sym->address = (char*)obj->sect_text + sym->value;
+			continue;
+		}
+		if (!strcmp(".data", sect_name))
+		{
+			sym->address = (char*)obj->sect_data + sym->value;
+			continue;
+		}
+		if (!strcmp(".sdata", sect_name))
+		{
+			sym->address = (char*)obj->sect_sdata + sym->value;
+			continue;
+		}
+
+		printf("No address for symbol '%s' of '%s'\n", sym->name, sect_name);
+		sym->address = NULL;
+	}
+
+	return 1;
+}
+
 static int load_needed_sections(elf_rel_t *obj)
-{
-	//REVIEW: For now, only expect exactly one of each .text and .data sections.
-	//TODO: Load .rodata* [aligned] not solved yet, as it .rodata still comes separated
+{//TODO: Adjust to allow multiple .text, .data and .sdata segments
+	//TODO: Loading .rodata* [aligned] not solved yet, as it .rodata still comes separated
 	Elf32_Shdr *sect_text = NULL;
 	Elf32_Shdr *sect_data = NULL;
+	Elf32_Shdr *sect_sdata = NULL;
 
 	//Find relevant sections
 	for (int i = 0; i < obj->elf.header.e_shnum; ++i)
@@ -422,33 +454,49 @@ static int load_needed_sections(elf_rel_t *obj)
 			sect_data = sect;
 			continue;
 		}
+		if (!strcmp(".sdata", name))
+		{
+			sect_sdata = sect;
+			continue;
+		}
 	}
 
-	if (!sect_text || !sect_data)
+	if (!sect_text || !sect_data || !sect_sdata)
 	{
-		error = "Could not find .text or .data";
+		error = "Could not find .text, .data or .sdata";
 		return 0;
 	}
 
 	obj->sect_text = aligned_alloc(sect_text->sh_addralign, sect_text->sh_size);
 	obj->sect_data = aligned_alloc(sect_data->sh_addralign, sect_data->sh_size);
+	obj->sect_sdata = aligned_alloc(sect_sdata->sh_addralign, sect_sdata->sh_size);
 
-	if (!obj->sect_text || !obj->sect_data)
+	if (!obj->sect_text || !obj->sect_data || !obj->sect_sdata)
 	{
 		error = "Failed to allocate memory for sections";
 		goto _load_needed_sections_error;
 	}
 
+	fseek(obj->elf.file, sect_text->sh_offset, SEEK_SET);
 	if (sect_text->sh_size != fread(obj->sect_text, 1, sect_text->sh_size, obj->elf.file))
 	{
 		error = "Failed to load .text";
 		goto _load_needed_sections_error;
 	}
+	fseek(obj->elf.file, sect_data->sh_offset, SEEK_SET);
 	if (sect_data->sh_size != fread(obj->sect_data, 1, sect_data->sh_size, obj->elf.file))
 	{
 		error = "Failed to load .data";
 		goto _load_needed_sections_error;
 	}
+	fseek(obj->elf.file, sect_sdata->sh_offset, SEEK_SET);
+	if (sect_sdata->sh_size != fread(obj->sect_sdata, 1, sect_sdata->sh_size, obj->elf.file))
+	{
+		error = "Failed to load .sdata";
+		goto _load_needed_sections_error;
+	}
+
+	compute_symbol_addresses(obj);
 
 	return 1;
 
@@ -536,7 +584,6 @@ static int apply_relocations(elf_rel_t *obj)
 int dlinit(char *own_path)
 {
 	error = NULL;
-
 	if (self)
 	{
 		error = "Already initialized wii-dlfcn";
@@ -569,7 +616,6 @@ _dlinit_error:
 
 void *dlopen(const char *path, int mode)
 {
-	error = NULL;
 	(void)mode; //TODO: Not
 
 	elf_rel_t *obj = elf_rel_create(path, &error);
@@ -611,7 +657,12 @@ _dlopen_error:
 
 int dlclose(void *handle)
 {
-	error = NULL;
+	if (!hashset_contains(loaded_relocatables, handle))
+	{
+		error = "Invalid handle";
+		return 1;
+	}
+
 	elf_rel_destroy((elf_rel_t*)handle);
 	return 0;
 }
@@ -621,4 +672,26 @@ char *dlerror(void)
 	char *ret = error;
 	error = NULL;
 	return ret;
+}
+
+void *dlsym(void *ptr, const char *name)
+{
+	elf_rel_t *handle = (elf_rel_t*)ptr;
+	if (!hashset_contains(loaded_relocatables, handle))
+	{
+		error = "Invalid handle";
+		return NULL;
+	}
+
+	size_t sym_count = ivector_get_count(handle->symbols);
+	for (size_t i = 0; i < sym_count; ++i)
+	{
+		def_symbol_t *sym = (def_symbol_t*)ivector_get(handle->symbols, i);
+
+		if (!strcmp(sym->name, name))
+			return sym->address;
+	}
+
+	error = "Symbol not found";
+	return NULL;
 }
