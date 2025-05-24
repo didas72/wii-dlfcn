@@ -6,7 +6,9 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <sus/hashes.h>
 #include <sus/ivector.h>
+#include <sus/hashset.h>
 
 #include "data.h"
 #include "elf.h"
@@ -14,6 +16,7 @@
 
 static char *error = NULL;
 static elf_exec_t *self = NULL;
+static hashset_t *loaded_relocatables = NULL;
 
 static int elf_valid_compat(Elf32_Ehdr *elf)
 {
@@ -489,30 +492,33 @@ static int apply_relocation(elf_rel_t *obj, rel_symbol_t *relocation, def_symbol
 
 static int apply_relocations(elf_rel_t *obj)
 {
-	rel_symbol_t *relocations = obj->relocations->data;
-
-	printf("Matching %d relocations:\n", obj->relocations->count);
-	for (size_t i = 0; i < obj->relocations->count; ++i)
+	size_t rel_count = ivector_get_count(obj->relocations);
+	printf("Matching %d relocations:\n", rel_count);
+	for (size_t i = 0; i < rel_count; ++i)
 	{
-		rel_symbol_t *rel = &relocations[i];
+		rel_symbol_t *rel = ivector_get(obj->relocations, i);;
 		def_symbol_t *sym = NULL;
-		def_symbol_t *local_syms = obj->symbols->data;
-		def_symbol_t *global_syms = self->symbols->data;
+		ivector_t *local_syms = obj->symbols;
+		size_t lsym_count = ivector_get_count(local_syms);
+		ivector_t *global_syms = self->symbols;
+		size_t gsym_count = ivector_get_count(global_syms);
 
 		//Find matching symbol //OPTIMIZE: Hashtable
-		for (size_t j = 0; j < obj->symbols->count && !sym; ++j)
+		for (size_t j = 0; j < lsym_count && sym == NULL; ++j)
 		{
-			if (strcmp(local_syms[j].name, rel->name))
+			def_symbol_t* lsym = ((def_symbol_t*)ivector_get(local_syms, j));
+			if (strcmp(lsym->name, rel->name))
 				continue;
 			
-			sym = &local_syms[j];
+			sym = lsym;
 		}
-		for (size_t j = 0; j < self->symbols->count && !sym; ++j)
+		for (size_t j = 0; j < gsym_count && sym == NULL; ++j)
 		{
-			if (strcmp(global_syms[j].name, rel->name))
+			def_symbol_t* gsym = ((def_symbol_t*)ivector_get(global_syms, j));
+			if (strcmp(gsym->name, rel->name))
 				continue;
 			
-			sym = &global_syms[j];
+			sym = gsym;
 		}
 
 		if (!sym)
@@ -552,23 +558,8 @@ int dlinit(char *own_path)
 	if (!elf_find_defined_symbols(exec))
 		goto _dlinit_error;
 
-	//TODO: Remove
-	def_symbol_t *global_symbols = exec->symbols->data;
-	printf("Found %d symbols, showing some functions:\n", exec->symbols->count);
-	int printed = 0;
-	for (size_t i = 0; i < exec->symbols->count && printed < 8; ++i)
-	{
-		def_symbol_t *sym = &global_symbols[i];
-
-		if (sym->type != STT_FUNC)
-			continue;
-
-		++printed;
-		printf("S%02d: name=%s value=0x%x bind=%d type=%d section=%d\n",
-			i, sym->name, sym->value, sym->bind, sym->type, sym->section);
-	}
-
 	self = exec;
+	loaded_relocatables = hashset_create(hash_str, compare_str);
 	return 0;
 
 _dlinit_error:
@@ -599,16 +590,6 @@ void *dlopen(const char *path, int mode)
 	if (!elf_find_relocations(obj))
 		goto _dlopen_error;
 
-	//TODO: Remove
-	rel_symbol_t *local_symbols = obj->relocations->data;
-	printf("Selected %d relocations:\n", obj->relocations->count);
-	for (size_t i = 0; i < obj->relocations->count; ++i)
-	{
-		rel_symbol_t *sym = &local_symbols[i];
-		printf("R%02d: name=%s rel_type=%d sect=%d off=0x%x addend=0x%x\n",
-			i, sym->name, sym->rel_type, sym->section, sym->offset, sym->addend);
-	}
-
 	if (!load_needed_sections(obj))
 		goto _dlopen_error;
 
@@ -618,6 +599,8 @@ void *dlopen(const char *path, int mode)
 	//Apply relocations
 	if (!apply_relocations(obj))
 		goto _dlopen_error;
+
+	hashset_add(loaded_relocatables, obj);
 
 	return obj;
 

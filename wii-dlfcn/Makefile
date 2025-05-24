@@ -25,7 +25,7 @@ INCLUDES	:= include
 # options for code generation
 #---------------------------------------------------------------------------------
 
-CFLAGS	= -g -O0 -Wall -Wextra -pedantic -fno-function-sections -fno-data-sections $(MACHDEP) $(INCLUDE)
+CFLAGS	= -g -O0 -Wall -Wextra -pedantic -fno-function-sections -fno-data-sections -DSUS_TARGET_VERSION=10000 $(MACHDEP) $(INCLUDE)
 CXXFLAGS	=	$(CFLAGS)
 
 LDFLAGS	=	-g $(MACHDEP) -Wl,-Map,$(notdir $@).map
