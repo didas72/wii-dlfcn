@@ -37,8 +37,8 @@ void test()
 
 	dbg_wait(30);
 
-	void *data = dlsym(handle, "test_int");
-	if (!data)
+	void *func = dlsym(handle, "print_ptr");
+	if (!func)
 	{
 		char *err = dlerror();
 		if (err)
@@ -47,8 +47,14 @@ void test()
 			printf("dlsym returned null with no error\n");
 		return;
 	}
-	printf("dlsym(handle, \"test_int\") = %p\n", data);
-	printf("*dlsym(handle, \"test_int\") = 0x%x\n", *(int*)data);
+	int *ptr = func;
+	printf("dlsym(handle, \"print_ptr\") = %p\n", func);
+	printf("*(dlsym(handle, \"print_ptr\")+20) = 0x%x\n", ptr[5]);
+
+	dbg_wait(150);
+
+	int ret = ((int (*)())func)();
+	printf("%d = dlsym(handle, \"print_ptr\")()\n", ret);
 	printf("dlsym success\n");
 
 	dbg_wait(30);

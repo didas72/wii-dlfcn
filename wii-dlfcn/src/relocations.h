@@ -3,7 +3,7 @@
 
 #define RELOCATE_WORD32(buff, addr) do { *(buff) = (addr); } while(0);
 #define RELOCATE_WORD30(buff, addr) do { *(buff) = ((addr) << 2) | (*(buff) & 0x3); } while(0);
-#define RELOCATE_LOW24(buff, addr)  do { *(buff) = (((addr) & 0xFFFFF) << 2) | (*(buff) & 0xF8000003); } while(0);
+#define RELOCATE_LOW24(buff, addr)  do { *(buff) = (((addr) & 0xFFFFFF) << 2) | (*(buff) & 0xF8000003); } while(0);
 #define RELOCATE_LOW14(buff, addr)  do { *(buff) = (((addr) & 0x3FF) << 2) | (*(buff) & 0xFFFF0003); } while(0);
 #define RELOCATE_HALF16(buff, addr) do { *(buff) = (addr) & 0xFFFF; } while(0);
 

@@ -425,7 +425,8 @@ static int compute_symbol_addresses(elf_rel_t *obj)
 			continue;
 		}
 
-		printf("No address for symbol '%s' of '%s'\n", sym->name, sect_name);
+		if (strcmp(sym->name, sect_name))
+			printf("No address for symbol '%s' of '%s'\n", sym->name, sect_name);
 		sym->address = NULL;
 	}
 
@@ -508,11 +509,13 @@ _load_needed_sections_error:
 
 static int apply_relocation(elf_rel_t *obj, rel_symbol_t *relocation, def_symbol_t *symbol)
 {
-	int *target = (int*)&((char*)obj->sect_text)[relocation->offset];
+	int place = (int)&((char*)obj->sect_text)[relocation->offset];
 
 	int sym = (int)symbol->value;
-	int place = (int)target;
+	int *target = (int*)place;
 	int addend = relocation->addend;
+
+	printf("Relocation of '%s' at %p with %p\n", symbol->name, (void*)target, (void*)sym);
 
 	switch (relocation->rel_type)
 	{
@@ -521,11 +524,11 @@ static int apply_relocation(elf_rel_t *obj, rel_symbol_t *relocation, def_symbol
 			break;
 
 		case R_PPC_ADDR16_HA:
-			RELOCATE_ADDR16_HA(target, sym, addend);
+			RELOCATE_ADDR16_HA(((uint16_t*)target), sym, addend);
 			break;
 
 		case R_PPC_ADDR16_LO:
-			RELOCATE_ADDR16_LO(target, sym, addend);
+			RELOCATE_ADDR16_LO(((uint16_t*)target), sym, addend);
 			break;
 
 		//TODO: Other relocations
@@ -559,6 +562,7 @@ static int apply_relocations(elf_rel_t *obj)
 				continue;
 			
 			sym = lsym;
+			printf("[LOCAL] ");
 		}
 		for (size_t j = 0; j < gsym_count && sym == NULL; ++j)
 		{
@@ -567,6 +571,7 @@ static int apply_relocations(elf_rel_t *obj)
 				continue;
 			
 			sym = gsym;
+			printf("[GLOBAL] ");
 		}
 
 		if (!sym)
@@ -574,8 +579,61 @@ static int apply_relocations(elf_rel_t *obj)
 
 		printf("Matched rel/sym %s\n", rel->name);
 
+		if (!strcmp(rel->name, "malloc"))
+		{
+			printf("Malloc matched to %p (real %p)\n", sym->address, (void*)&malloc);
+		}
+
 		if (!apply_relocation(obj, rel, sym))
 			return 0;
+	}
+
+	return 1;
+}
+
+static int compute_own_symbols(elf_exec_t *exec)
+{
+	size_t sym_count = ivector_get_count(exec->symbols);
+
+	for (size_t i = 0; i < sym_count; ++i)
+	{//REVIEW: Currently relies on the hope that elf2dol will keep .text as the first section and that all needed functions are under it
+		def_symbol_t* sym = ivector_get(exec->symbols, i);
+		Elf32_Shdr *sect = &exec->elf.sects[sym->section];
+		char *sect_name = &exec->elf.sh_strings[sect->sh_name];
+		if (!strcmp(".text", sect_name))
+		{
+			sym->address = (void*)sym->value;
+			if (!strcmp("malloc", sym->name))
+				printf("Setting own malloc to %p (real %p)\n", sym->address, (void*)&malloc);
+			continue;
+		}
+		if (!strcmp(".data", sect_name))
+		{
+			sym->address = (void*)sym->value;
+			continue;
+		}
+		if (!strcmp(".sdata", sect_name))
+		{
+			sym->address = (void*)sym->value;
+			continue;
+		}
+		if (!strcmp(".init", sect_name) || !strcmp(".fini", sect_name)
+			|| !strcmp(".rodata", sect_name) || !strcmp(".eh_frame_hdr", sect_name)
+			|| !strcmp(".sdata2", sect_name) || !strcmp(".eh_frame", sect_name)
+			|| !strcmp(".init", sect_name) || !strcmp(".fini", sect_name)
+			|| !strcmp(".got2", sect_name) || !strcmp(".ctors", sect_name)
+			|| !strcmp(".dtors", sect_name) || !strcmp(".sbss", sect_name)
+			|| !strcmp(".bss", sect_name) || !strcmp(".comment", sect_name)
+			|| !strcmp(".gnu.attributes", sect_name) || !strcmp(".debug_aranges", sect_name)
+			|| !strcmp(".debug_info", sect_name) || !strcmp(".debug_abbrev", sect_name)
+			|| !strcmp(".debug_line", sect_name) || !strcmp(".debug_str", sect_name)
+			|| !strcmp(".debug_loclists", sect_name) || !strcmp(".debug_rnglists", sect_name)
+			|| !strcmp(".symtab", sect_name) || !strcmp(".strtab", sect_name)
+			|| !strcmp(".shstrtab", sect_name))
+			continue;
+
+		printf("No address for own symbol '%s' of '%s'\n", sym->name, sect_name);
+		sym->address = NULL;
 	}
 
 	return 1;
@@ -603,6 +661,9 @@ int dlinit(char *own_path)
 		goto _dlinit_error;
 
 	if (!elf_find_defined_symbols(exec))
+		goto _dlinit_error;
+
+	if (!compute_own_symbols(exec))
 		goto _dlinit_error;
 
 	self = exec;
