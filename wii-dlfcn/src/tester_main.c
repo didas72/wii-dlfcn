@@ -7,6 +7,7 @@
 #include <ogc/system.h>
 #include <wiiuse/wpad.h>
 #include <fat.h>
+#include <debug.h>
 
 static void dbg_wait(int frames)
 {
@@ -70,6 +71,7 @@ void test()
 
 int main()
 {
+	DEBUG_Init(GDBSTUB_DEVICE_USB, 1);
 	int frames = 0;
 	VIDEO_Init();
 	WPAD_Init();
@@ -85,6 +87,7 @@ int main()
 
 	printf("Starting\n");
 	VIDEO_WaitVSync();
+	//_break();
 
 	if (!fatInitDefault())
 	{

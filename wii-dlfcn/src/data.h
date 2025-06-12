@@ -4,6 +4,7 @@
 #include <stdio.h>
 
 #include <sus/ivector.h>
+#include <sus/hashtable.h>
 
 #include "elf.h"
 
@@ -37,10 +38,8 @@ typedef struct {
 	ivector_t *relocations;
 	//ivector_t<def_symbol_t>
 	ivector_t *symbols;
-	void *sect_text;
-	void *sect_data;
-	void *sect_sdata;
-	//void *sect_rodata;
+	//hashtable_t<int, void*> owns values
+	hashtable_t *loaded_sections;
 } elf_rel_t;
 
 typedef struct {

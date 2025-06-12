@@ -134,7 +134,7 @@ static int elf_load_shstrings(elf_file_t *elf)
 	return 1;
 }
 
-static int save_symbols(elf_file_t *elf, Elf32_Sym *symbols, int sym_count, char *sym_strs, ivector_t *finals)
+static int save_symbols(elf_file_t *elf, Elf32_Sym *symbols, int sym_count, char *sym_strs, ivector_t *finals, hashtable_t *loaded_sections)
 {
 	for (int i = 1; i < sym_count; ++i)
 	{
@@ -145,16 +145,37 @@ static int save_symbols(elf_file_t *elf, Elf32_Sym *symbols, int sym_count, char
 		//Skip unneeded symbols
 		if (type == STT_NOTYPE || type == STT_FILE) continue;
 
+
 		//Find symbol name
 		char *name = type == STT_SECTION ? &elf->sh_strings[elf->sects[symbol->st_shndx].sh_name] : &sym_strs[symbol->st_name];
 
 		//Copy data
 		final.name = strdup(name);
-		final.value = symbol->st_value;
 		final.bind = ELF32_ST_BIND(symbol->st_info);
 		final.type = type;
 		final.section = symbol->st_shndx;
 
+		if (type == STT_SECTION)
+		{
+			if (!loaded_sections)
+			{
+				printf("Skip section symbol '%s' for file with no section table.\n", name);
+				final.value = 0;
+				goto _save_symbols_skip_value;
+			}
+			void *sect_base = hashtable_get(loaded_sections, (void*)(int)symbol->st_shndx);
+			if (!sect_base)
+			{
+				printf("Skip symbol of section not loaded\n");
+				final.value = 0;
+				goto _save_symbols_skip_value;
+			}
+			final.value = (int)sect_base + symbol->st_value;
+		}
+		else
+			final.value = symbol->st_value;
+
+_save_symbols_skip_value:
 		//Save symbol
 		ivector_append(finals, &final);
 	}
@@ -214,7 +235,7 @@ static int elf_find_defined_symbols(elf_exec_t *exec)
 		}
 
 		//Interpret data (skipping NULL symbol)
-		char success = save_symbols(&exec->elf, &symbols[1], sym_count - 1, sym_strs, exec->symbols);
+		int success = save_symbols(&exec->elf, &symbols[1], sym_count - 1, sym_strs, exec->symbols, NULL);
 
 		//Cleanup
 		free(symbols);
@@ -324,7 +345,7 @@ static int elf_find_relocations(elf_rel_t *obj)
 		}
 
 		//Interpret data
-		char success = save_relocations(&obj->elf, i, relocations, rela_count, symbols, sym_strs, obj->relocations);
+		int success = save_relocations(&obj->elf, rela_sect->sh_info, relocations, rela_count, symbols, sym_strs, obj->relocations);
 
 		//Cleanup
 		free(relocations);
@@ -388,7 +409,7 @@ static int elf_find_local_symbols(elf_rel_t *obj)
 		}
 
 		//Interpret data (skipping NULL symbol)
-		char success = save_symbols(&obj->elf, &symbols[1], sym_count - 1, sym_strs, obj->symbols);
+		int success = save_symbols(&obj->elf, &symbols[1], sym_count - 1, sym_strs, obj->symbols, obj->loaded_sections);
 
 		//Cleanup
 		free(symbols);
@@ -401,115 +422,95 @@ static int elf_find_local_symbols(elf_rel_t *obj)
 }
 
 static int compute_symbol_addresses(elf_rel_t *obj)
-{//TODO: Adjust to allow multiple .text and .data segments
+{
 	size_t sym_count = ivector_get_count(obj->symbols);
 
 	for (size_t i = 0; i < sym_count; ++i)
 	{
 		def_symbol_t* sym = ivector_get(obj->symbols, i);
-		Elf32_Shdr *sect = &obj->elf.sects[sym->section];
-		char *sect_name = &obj->elf.sh_strings[sect->sh_name];
-		if (!strcmp(".text", sect_name))
+		void *sect_buff = hashtable_get(obj->loaded_sections, (void*)sym->section);
+
+		if (!sect_buff)
 		{
-			sym->address = (char*)obj->sect_text + sym->value;
-			continue;
-		}
-		if (!strcmp(".data", sect_name))
-		{
-			sym->address = (char*)obj->sect_data + sym->value;
-			continue;
-		}
-		if (!strcmp(".sdata", sect_name))
-		{
-			sym->address = (char*)obj->sect_sdata + sym->value;
-			continue;
+			Elf32_Shdr *sect = &obj->elf.sects[sym->section];
+			char *sect_name = &obj->elf.sh_strings[sect->sh_name];
+			printf("No address for symbol '%s' of '%s'\n", sym->name, sect_name);
+			sym->address = NULL;
 		}
 
-		if (strcmp(sym->name, sect_name))
-			printf("No address for symbol '%s' of '%s'\n", sym->name, sect_name);
-		sym->address = NULL;
+		sym->address = (char*)sect_buff + sym->value;
 	}
 
+	return 1;
+}
+
+static int load_progbits_section(elf_rel_t *obj, Elf32_Shdr *sect, int sect_num)
+{
+	void *sect_buff = aligned_alloc(sect->sh_addralign, sect->sh_size);
+	if (!sect_buff)
+	{
+		error = "Failed to allocate memory for section.";
+		return 0;
+	}
+
+	fseek(obj->elf.file, sect->sh_offset, SEEK_SET);
+	if (sect->sh_size != fread(sect_buff, 1, sect->sh_size, obj->elf.file))
+	{
+		error = "Failed to load .data";
+		return 0;
+	}
+
+	hashtable_add(obj->loaded_sections, (void*)sect_num, sect_buff);
+	return 1;
+}
+
+static int alloc_bss_section(elf_rel_t *obj, Elf32_Shdr *sect, int sect_num)
+{
+	void *sect_buff = aligned_alloc(sect->sh_addralign, sect->sh_size);
+	if (!sect_buff)
+	{
+		error = "Failed to allocate memory for bss section.";
+		return 0;
+	}
+
+	hashtable_add(obj->loaded_sections, (void*)sect_num, sect_buff);
 	return 1;
 }
 
 static int load_needed_sections(elf_rel_t *obj)
-{//TODO: Adjust to allow multiple .text, .data and .sdata segments
-	//TODO: Loading .rodata* [aligned] not solved yet, as it .rodata still comes separated
-	Elf32_Shdr *sect_text = NULL;
-	Elf32_Shdr *sect_data = NULL;
-	Elf32_Shdr *sect_sdata = NULL;
-
-	//Find relevant sections
+{
 	for (int i = 0; i < obj->elf.header.e_shnum; ++i)
 	{
 		Elf32_Shdr *sect = &obj->elf.sects[i];
-		char *name = &obj->elf.sh_strings[sect->sh_name];
-		if (!strcmp(".text", name))
+		if (sect->sh_type == SHT_PROGBITS)
 		{
-			sect_text = sect;
-			continue;
+			if (!load_progbits_section(obj, sect, i))
+				return 0;
+
+			printf("Loaded PROGBITS sect '%s'\n", &obj->elf.sh_strings[sect->sh_name]);
 		}
-		if (!strcmp(".data", name))
+		else if (sect->sh_type == SHT_NOBITS)
 		{
-			sect_data = sect;
-			continue;
-		}
-		if (!strcmp(".sdata", name))
-		{
-			sect_sdata = sect;
-			continue;
+			if (!alloc_bss_section(obj, sect, i))
+				return 0;
 		}
 	}
 
-	if (!sect_text || !sect_data || !sect_sdata)
-	{
-		error = "Could not find .text, .data or .sdata";
-		return 0;
-	}
-
-	obj->sect_text = aligned_alloc(sect_text->sh_addralign, sect_text->sh_size);
-	obj->sect_data = aligned_alloc(sect_data->sh_addralign, sect_data->sh_size);
-	obj->sect_sdata = aligned_alloc(sect_sdata->sh_addralign, sect_sdata->sh_size);
-
-	if (!obj->sect_text || !obj->sect_data || !obj->sect_sdata)
-	{
-		error = "Failed to allocate memory for sections";
-		goto _load_needed_sections_error;
-	}
-
-	fseek(obj->elf.file, sect_text->sh_offset, SEEK_SET);
-	if (sect_text->sh_size != fread(obj->sect_text, 1, sect_text->sh_size, obj->elf.file))
-	{
-		error = "Failed to load .text";
-		goto _load_needed_sections_error;
-	}
-	fseek(obj->elf.file, sect_data->sh_offset, SEEK_SET);
-	if (sect_data->sh_size != fread(obj->sect_data, 1, sect_data->sh_size, obj->elf.file))
-	{
-		error = "Failed to load .data";
-		goto _load_needed_sections_error;
-	}
-	fseek(obj->elf.file, sect_sdata->sh_offset, SEEK_SET);
-	if (sect_sdata->sh_size != fread(obj->sect_sdata, 1, sect_sdata->sh_size, obj->elf.file))
-	{
-		error = "Failed to load .sdata";
-		goto _load_needed_sections_error;
-	}
-
-	compute_symbol_addresses(obj);
-
-	return 1;
-
-_load_needed_sections_error:
-	free(obj->sect_text); obj->sect_text = NULL;
-	free(obj->sect_data); obj->sect_data = NULL;
-	return 0;
+	return compute_symbol_addresses(obj);
 }
 
 static int apply_relocation(elf_rel_t *obj, rel_symbol_t *relocation, def_symbol_t *symbol)
 {
-	int place = (int)&((char*)obj->sect_text)[relocation->offset];
+	void *sect_buff = hashtable_get(obj->loaded_sections, (void*)(int)relocation->section);
+	if (!sect_buff)
+	{
+		char *sect_name = &obj->elf.sh_strings[obj->elf.sects[relocation->section].sh_name];
+		printf("Sect '%s' for '%s' is not loaded.\n", sect_name, symbol->name);
+		error = "Relocation needed for section not loaded.";
+		return 0;
+	}
+
+	int place = (int)&((char*)sect_buff)[relocation->offset];
 
 	int sym = (int)symbol->value;
 	int *target = (int*)place;
@@ -579,11 +580,6 @@ static int apply_relocations(elf_rel_t *obj)
 
 		printf("Matched rel/sym %s\n", rel->name);
 
-		if (!strcmp(rel->name, "malloc"))
-		{
-			printf("Malloc matched to %p (real %p)\n", sym->address, (void*)&malloc);
-		}
-
 		if (!apply_relocation(obj, rel, sym))
 			return 0;
 	}
@@ -603,18 +599,16 @@ static int compute_own_symbols(elf_exec_t *exec)
 		if (!strcmp(".text", sect_name))
 		{
 			sym->address = (void*)sym->value;
-			if (!strcmp("malloc", sym->name))
-				printf("Setting own malloc to %p (real %p)\n", sym->address, (void*)&malloc);
 			continue;
 		}
 		if (!strcmp(".data", sect_name))
 		{
-			sym->address = (void*)sym->value;
+			sym->address = (void*)sym->value; //FIXME: Wrong
 			continue;
 		}
 		if (!strcmp(".sdata", sect_name))
 		{
-			sym->address = (void*)sym->value;
+			sym->address = (void*)sym->value; //FIXME: Wrong
 			continue;
 		}
 		if (!strcmp(".init", sect_name) || !strcmp(".fini", sect_name)
@@ -691,17 +685,14 @@ void *dlopen(const char *path, int mode)
 	if (!elf_load_shstrings(&obj->elf))
 		goto _dlopen_error;
 
+	if (!load_needed_sections(obj))
+		goto _dlopen_error;
+
 	if (!elf_find_local_symbols(obj))
 		goto _dlopen_error;
 
 	if (!elf_find_relocations(obj))
 		goto _dlopen_error;
-
-	if (!load_needed_sections(obj))
-		goto _dlopen_error;
-
-	//TODO: Finish implementing. Must:
-	//Reserve .bss* [aligned]
 	
 	//Apply relocations
 	if (!apply_relocations(obj))
@@ -750,9 +741,13 @@ void *dlsym(void *ptr, const char *name)
 		def_symbol_t *sym = (def_symbol_t*)ivector_get(handle->symbols, i);
 
 		if (!strcmp(sym->name, name))
+		{
+			if (!sym->address) printf("NULL sym\n");
 			return sym->address;
+		}
 	}
 
+	printf("Symbol '%s' not found\n", name);
 	error = "Symbol not found";
 	return NULL;
 }

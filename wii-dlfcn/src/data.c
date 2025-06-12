@@ -1,8 +1,11 @@
 #include "data.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 #include <sus/ivector.h>
+#include <sus/hashtable.h>
+#include <sus/hashes.h>
 
 #include "elf.h"
 
@@ -52,6 +55,16 @@ elf_rel_t *elf_rel_create(const char *path, char **error)
 		return NULL;
 	}
 
+	obj->loaded_sections = hashtable_create(hash_ptr, compare_ptr);
+	if (!obj->loaded_sections)
+	{
+		*error = "Failed to allocate section hashtable.";
+		ivector_destroy(obj->relocations);
+		ivector_destroy(obj->symbols);
+		fclose(obj->elf.file); free(obj);
+		return NULL;
+	}
+
 	return obj;
 }
 void elf_rel_destroy(elf_rel_t *obj)
@@ -61,6 +74,7 @@ void elf_rel_destroy(elf_rel_t *obj)
 	if (obj->elf.sh_strings) free(obj->elf.sh_strings);
 	if (obj->relocations) ivector_destroy(obj->relocations);
 	if (obj->symbols) ivector_destroy(obj->symbols);
+	if (obj->loaded_sections) hashtable_destroy(obj->loaded_sections);
 	free(obj);
 }
 

@@ -19,7 +19,7 @@ TARGET		:=	$(notdir $(CURDIR))
 BUILD		:=	build
 SOURCES		:=	src
 DATA		:=	data
-INCLUDES	:= include 
+INCLUDES	:= include
 
 #---------------------------------------------------------------------------------
 # options for code generation
@@ -33,7 +33,7 @@ LDFLAGS	=	-g $(MACHDEP) -Wl,-Map,$(notdir $@).map
 #---------------------------------------------------------------------------------
 # any extra libraries we wish to link with the project
 #---------------------------------------------------------------------------------
-LIBS	:=	-lsus -lwiiuse -lbte -lfat -logc -lm
+LIBS	:=	-lsus -lwiiuse -lbte -lfat -logc -lm -ldb
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
